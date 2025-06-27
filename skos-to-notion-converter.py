@@ -26,14 +26,49 @@ class SKOSToNotionConverter:
         try:
             self.graph.parse(file_path, format='turtle')
             print(f"Loaded {len(self.graph)} triples from {file_path}")
+        except FileNotFoundError:
+            print(f"❌ Error: File not found: {file_path}")
+            raise
+        except PermissionError:
+            print(f"❌ Error: Permission denied reading file: {file_path}")
+            raise
         except Exception as e:
-            print(f"Error parsing Turtle file: {e}")
-            print("\nCommon Turtle syntax issues:")
-            print("- Missing '.' at the end of statements")
-            print("- Missing ';' between properties of the same subject")
-            print("- Unclosed brackets or quotes")
-            print("- Invalid URIs (missing < > brackets)")
-            print("\nTry validating your Turtle file at: http://ttl.summerofcode.be/")
+            # Get more specific error information
+            error_type = type(e).__name__
+            error_msg = str(e)
+            
+            print(f"❌ Error parsing Turtle file: {error_type}")
+            print(f"   Details: {error_msg}")
+            
+            # Try to extract line number from error if available
+            import re
+            line_match = re.search(r'line (\d+)', error_msg)
+            if line_match:
+                line_num = line_match.group(1)
+                print(f"   Error at line: {line_num}")
+                
+                # Try to show the problematic line
+                try:
+                    with open(file_path, 'r') as f:
+                        lines = f.readlines()
+                        line_idx = int(line_num) - 1
+                        if 0 <= line_idx < len(lines):
+                            print(f"   Line {line_num}: {lines[line_idx].strip()}")
+                            if line_idx > 0:
+                                print(f"   Line {line_num-1}: {lines[line_idx-1].strip()}")
+                            if line_idx < len(lines) - 1:
+                                print(f"   Line {line_num+1}: {lines[line_idx+1].strip()}")
+                except:
+                    pass
+            
+            print("\n📌 Common Turtle syntax issues:")
+            print("   - Missing '.' at the end of statements")
+            print("   - Missing ';' between properties of the same subject")
+            print("   - Unclosed brackets or quotes")
+            print("   - Invalid URIs (missing < > brackets)")
+            print("   - Invalid escape sequences in strings")
+            print("   - Malformed prefixes or namespaces")
+            print("\n💡 Tip: Try validating your Turtle file at: http://ttl.summerofcode.be/")
             raise
         
     def get_label(self, uri):
@@ -723,120 +758,156 @@ class NotionToSKOSConverter:
         print(f"Processed {len(processed)} unique concepts")
 
 def main():
-    parser = argparse.ArgumentParser(description='Convert between SKOS RDF (Turtle) and Notion-compatible formats')
-    
-    # Create subparsers for different operations
-    subparsers = parser.add_subparsers(dest='command', help='Conversion direction')
-    
-    # SKOS to Notion
-    skos_parser = subparsers.add_parser('to-notion', help='Convert SKOS Turtle to Notion formats')
-    skos_parser.add_argument('input_file', help='Input Turtle RDF file')
-    skos_parser.add_argument('--format', choices=['csv', 'markdown', 'json', 'all'], 
-                             default='csv', help='Output format (default: csv)')
-    skos_parser.add_argument('--output', help='Output file name (without extension)')
-    skos_parser.add_argument('--skip-validation', action='store_true', 
-                             help='Skip SKOS validation checks')
-    skos_parser.add_argument('--force', action='store_true',
-                             help='Continue conversion even if validation finds errors')
-    skos_parser.add_argument('--markdown-style', choices=['headings', 'bullets', 'mixed'], 
-                             default='headings', help='Markdown formatting style (default: headings)')
-    
-    # Notion to SKOS
-    notion_parser = subparsers.add_parser('to-skos', help='Convert Notion markdown to SKOS Turtle')
-    notion_parser.add_argument('input_file', help='Input Notion markdown file')
-    notion_parser.add_argument('--output', help='Output file name (default: input_skos.ttl)')
-    notion_parser.add_argument('--namespace', default='http://example.org/vocabulary#',
-                               help='Namespace URI for new concepts (default: http://example.org/vocabulary#)')
-    notion_parser.add_argument('--prefix', default='ex',
-                               help='Namespace prefix (default: ex)')
-    
-    args = parser.parse_args()
-    
-    if not args.command:
-        parser.print_help()
-        return
-    
-    if args.command == 'to-notion':
-        # Original functionality
-        if args.output:
-            base_output = args.output
-        else:
-            base_output = args.input_file.rsplit('.', 1)[0] + '_notion'
+    try:
+        parser = argparse.ArgumentParser(description='Convert between SKOS RDF (Turtle) and Notion-compatible formats')
         
-        converter = SKOSToNotionConverter()
-        converter.load_turtle(args.input_file)
+        # Create subparsers for different operations
+        subparsers = parser.add_subparsers(dest='command', help='Conversion direction')
         
-        # Store markdown style preference
-        converter.markdown_style = args.markdown_style
+        # SKOS to Notion
+        skos_parser = subparsers.add_parser('to-notion', help='Convert SKOS Turtle to Notion formats')
+        skos_parser.add_argument('input_file', help='Input Turtle RDF file')
+        skos_parser.add_argument('--format', choices=['csv', 'markdown', 'json', 'all'], 
+                                 default='csv', help='Output format (default: csv)')
+        skos_parser.add_argument('--output', help='Output file name (without extension)')
+        skos_parser.add_argument('--skip-validation', action='store_true', 
+                                 help='Skip SKOS validation checks')
+        skos_parser.add_argument('--force', action='store_true',
+                                 help='Continue conversion even if validation finds errors')
+        skos_parser.add_argument('--markdown-style', choices=['headings', 'bullets', 'mixed'], 
+                                 default='headings', help='Markdown formatting style (default: headings)')
         
-        # Run validation unless skipped
-        if not args.skip_validation:
-            is_valid = converter.validate_skos()
+        # Notion to SKOS
+        notion_parser = subparsers.add_parser('to-skos', help='Convert Notion markdown to SKOS Turtle')
+        notion_parser.add_argument('input_file', help='Input Notion markdown file')
+        notion_parser.add_argument('--output', help='Output file name (default: input_skos.ttl)')
+        notion_parser.add_argument('--namespace', default='http://example.org/vocabulary#',
+                                   help='Namespace URI for new concepts (default: http://example.org/vocabulary#)')
+        notion_parser.add_argument('--prefix', default='ex',
+                                   help='Namespace prefix (default: ex)')
+        
+        args = parser.parse_args()
+        
+        if not args.command:
+            parser.print_help()
+            return
+        
+        if args.command == 'to-notion':
+            # Original functionality
+            if args.output:
+                base_output = args.output
+            else:
+                base_output = args.input_file.rsplit('.', 1)[0] + '_notion'
             
-            if not is_valid and not args.force:
-                print("\n❌ Validation found critical errors. Conversion aborted.")
-                print("   Use --force to convert anyway, or fix the issues and try again.")
-                print("   Use --skip-validation to skip validation entirely.\n")
-                return
-            elif not is_valid and args.force:
-                print("\n⚠️  Continuing with conversion despite errors...\n")
-        
-        if args.format in ['csv', 'all']:
-            converter.to_notion_csv(f"{base_output}.csv")
+            converter = SKOSToNotionConverter()
             
-        if args.format in ['markdown', 'all']:
-            converter.to_notion_markdown(f"{base_output}.md")
+            try:
+                converter.load_turtle(args.input_file)
+            except Exception as e:
+                print(f"\n❌ Failed to load Turtle file")
+                return 1
             
-        if args.format in ['json', 'all']:
-            converter.to_notion_json(f"{base_output}.json")
-        
-        print("\nConversion complete!")
-        print("\nNotion Import Instructions:")
-        print("1. For CSV: Import into Notion as a table database")
-        print("   - Use 'Title' as the page title")
-        print("   - 'Parent' column creates hierarchy")
-        print("   - Filter/group by 'Concept Scheme' or 'Level'")
-        print("2. For Markdown: Copy/paste into Notion page")
-        print("   - Hierarchy preserved as nested headings")
-        print("   - Use Cmd/Ctrl+Shift+7 to convert to toggle lists")
-        print("3. For JSON: Use with Notion API for programmatic import")
-        
-    elif args.command == 'to-skos':
-        # Notion to SKOS conversion
-        if args.output:
-            output_file = args.output
-        else:
-            output_file = args.input_file.rsplit('.', 1)[0] + '_skos.ttl'
-        
-        # Prompt for namespace if using default
-        if args.namespace == 'http://example.org/vocabulary#':
-            print("\n" + "="*60)
-            print("NAMESPACE CONFIGURATION")
-            print("="*60)
-            print(f"Current namespace: {args.namespace}")
-            print(f"Current prefix: {args.prefix}")
-            print("\nPress Enter to use these defaults, or type new values:")
+            # Store markdown style preference
+            converter.markdown_style = args.markdown_style
             
-            new_namespace = input("Namespace URI [http://example.org/vocabulary#]: ").strip()
-            if new_namespace:
-                args.namespace = new_namespace
+            # Run validation unless skipped
+            if not args.skip_validation:
+                is_valid = converter.validate_skos()
                 
-            new_prefix = input("Namespace prefix [ex]: ").strip()
-            if new_prefix:
-                args.prefix = new_prefix
-        
-        converter = NotionToSKOSConverter(namespace_uri=args.namespace, prefix=args.prefix)
-        converter.parse_markdown(args.input_file)
-        converter.export_turtle(output_file)
-        
-        print("\n✅ Notion to SKOS conversion complete!")
-        print("\nConversion rules applied:")
-        print("- H1 headers → SKOS Concept Schemes")
-        print("- H2 headers → Top Concepts")
-        print("- H3+ headers → Narrower concepts with broader relationships")
-        print("- All concepts have skos:inScheme relationship")
-        print("- New concepts assigned UUID-based URIs")
-        print("- Missing definitions replaced with 'Lorem ipsum'")
+                if not is_valid and not args.force:
+                    print("\n❌ Validation found critical errors. Conversion aborted.")
+                    print("   Use --force to convert anyway, or fix the issues and try again.")
+                    print("   Use --skip-validation to skip validation entirely.\n")
+                    return 1
+                elif not is_valid and args.force:
+                    print("\n⚠️  Continuing with conversion despite errors...\n")
+            
+            try:
+                if args.format in ['csv', 'all']:
+                    converter.to_notion_csv(f"{base_output}.csv")
+                    
+                if args.format in ['markdown', 'all']:
+                    converter.to_notion_markdown(f"{base_output}.md")
+                    
+                if args.format in ['json', 'all']:
+                    converter.to_notion_json(f"{base_output}.json")
+            except Exception as e:
+                print(f"\n❌ Error during conversion: {type(e).__name__}")
+                print(f"   Details: {e}")
+                import traceback
+                traceback.print_exc()
+                return 1
+            
+            print("\nConversion complete!")
+            print("\nNotion Import Instructions:")
+            print("1. For CSV: Import into Notion as a table database")
+            print("   - Use 'Title' as the page title")
+            print("   - 'Parent' column creates hierarchy")
+            print("   - Filter/group by 'Concept Scheme' or 'Level'")
+            print("2. For Markdown: Copy/paste into Notion page")
+            print("   - Hierarchy preserved as nested headings")
+            print("   - Use Cmd/Ctrl+Shift+7 to convert to toggle lists")
+            print("3. For JSON: Use with Notion API for programmatic import")
+            
+        elif args.command == 'to-skos':
+            # Notion to SKOS conversion
+            if args.output:
+                output_file = args.output
+            else:
+                output_file = args.input_file.rsplit('.', 1)[0] + '_skos.ttl'
+            
+            # Prompt for namespace if using default
+            if args.namespace == 'http://example.org/vocabulary#':
+                print("\n" + "="*60)
+                print("NAMESPACE CONFIGURATION")
+                print("="*60)
+                print(f"Current namespace: {args.namespace}")
+                print(f"Current prefix: {args.prefix}")
+                print("\nPress Enter to use these defaults, or type new values:")
+                
+                new_namespace = input("Namespace URI [http://example.org/vocabulary#]: ").strip()
+                if new_namespace:
+                    args.namespace = new_namespace
+                    
+                new_prefix = input("Namespace prefix [ex]: ").strip()
+                if new_prefix:
+                    args.prefix = new_prefix
+            
+            converter = NotionToSKOSConverter(namespace_uri=args.namespace, prefix=args.prefix)
+            
+            try:
+                converter.parse_markdown(args.input_file)
+            except Exception as e:
+                print(f"\n❌ Failed to parse markdown file")
+                return 1
+                
+            try:
+                converter.export_turtle(output_file)
+            except Exception as e:
+                print(f"\n❌ Error exporting Turtle: {type(e).__name__}")
+                print(f"   Details: {e}")
+                return 1
+            
+            print("\n✅ Notion to SKOS conversion complete!")
+            print("\nConversion rules applied:")
+            print("- H1 headers → SKOS Concept Schemes")
+            print("- H2 headers → Top Concepts")
+            print("- H3+ headers → Narrower concepts with broader relationships")
+            print("- All concepts have skos:inScheme relationship")
+            print("- New concepts assigned UUID-based URIs")
+            print("- Missing definitions replaced with 'Lorem ipsum'")
+            
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Conversion cancelled by user")
+        return 1
+    except Exception as e:
+        print(f"\n❌ Unexpected error: {type(e).__name__}")
+        print(f"   Details: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+    
+    return 0 Missing definitions replaced with 'Lorem ipsum'")
 
 if __name__ == "__main__":
     main()
