@@ -9,6 +9,8 @@ import csv
 import json
 import uuid
 import re
+import sys
+import os
 from io import StringIO
 from rdflib import Graph, Namespace, URIRef, Literal
 from rdflib.namespace import SKOS, RDF, RDFS, DC, DCTERMS
@@ -182,4 +184,935 @@ class SKOSToNotionConverter:
         
         # Find orphan concepts (not in hierarchy but are concepts)
         # A concept is an orphan if it has no broader concept and is not a top concept
-        orph
+        orphans = set()
+        for concept in all_concepts:
+            has_broader = bool(list(self.graph.objects(concept, SKOS.broader)))
+            is_top = concept in top_concepts
+            is_child = concept in children_assigned
+            
+            if not has_broader and not is_top and not is_child:
+                orphans.add(concept)
+        
+        # Group orphans by scheme if they belong to one
+        orphans_by_scheme = defaultdict(set)
+        orphans_no_scheme = set()
+        
+        for orphan in orphans:
+            if orphan in concept_to_scheme:
+                orphans_by_scheme[concept_to_scheme[orphan]].add(orphan)
+            else:
+                orphans_no_scheme.add(orphan)
+                
+        return schemes, hierarchy, top_concepts, orphans_by_scheme, orphans_no_scheme
+    
+    def validate_skos(self):
+        """Validate SKOS data and report issues"""
+        print("\n=== SKOS Validation Report ===\n")
+        
+        issues = []
+        warnings = []
+        
+        # Track all concepts and schemes
+        concepts = set(self.graph.subjects(RDF.type, SKOS.Concept))
+        schemes = set(self.graph.subjects(RDF.type, SKOS.ConceptScheme))
+        
+        print(f"Found {len(concepts)} concepts and {len(schemes)} concept schemes\n")
+        
+        # 1. Check for duplicate URIs/IDs (Critical issue)
+        print("Checking for duplicate URIs...")
+        all_resources = list(concepts) + list(schemes)
+        uri_counts = defaultdict(int)
+        for resource in all_resources:
+            uri_counts[str(resource)] += 1
+        
+        for uri, count in uri_counts.items():
+            if count > 1:
+                issues.append(f"Duplicate URI found {count} times: {uri}")
+        
+        # 2. Check for missing labels
+        print("Checking for missing labels...")
+        for concept in concepts:
+            if not list(self.graph.objects(concept, SKOS.prefLabel)):
+                if not list(self.graph.objects(concept, RDFS.label)):
+                    issues.append(f"Concept {concept} has no prefLabel or rdfs:label")
+        
+        # 3. Check for circular references
+        print("Checking for circular broader/narrower relationships...")
+        def find_circular_refs(start, current, path, visited_paths):
+            if current in path:
+                return path + [current]
+            if (start, current) in visited_paths:
+                return None
+            visited_paths.add((start, current))
+            
+            path = path + [current]
+            for broader in self.graph.objects(current, SKOS.broader):
+                result = find_circular_refs(start, broader, path, visited_paths)
+                if result:
+                    return result
+            return None
+        
+        circular_refs = set()
+        for concept in concepts:
+            visited_paths = set()
+            circular_path = find_circular_refs(concept, concept, [], visited_paths)
+            if circular_path and len(circular_path) > 2:
+                # Convert to labels for readability
+                path_labels = [self.get_label(c) for c in circular_path]
+                circular_refs.add(" -> ".join(path_labels))
+        
+        for ref in circular_refs:
+            issues.append(f"Circular reference detected: {ref}")
+        
+        # 4. Check for concepts without schemes (Warning, not critical)
+        print("Checking for concepts without concept schemes...")
+        orphan_concepts = []
+        for concept in concepts:
+            in_scheme = list(self.graph.objects(concept, SKOS.inScheme))
+            if not in_scheme:
+                orphan_concepts.append(self.get_label(concept))
+        
+        if orphan_concepts:
+            warnings.append(f"{len(orphan_concepts)} concepts not associated with any concept scheme: {', '.join(orphan_concepts[:5])}{'...' if len(orphan_concepts) > 5 else ''}")
+        
+        # 5. Check for duplicate labels (Warning, not critical - valid but worth noting)
+        print("Checking for duplicate preferred labels...")
+        label_map = defaultdict(list)
+        for concept in concepts:
+            labels = list(self.graph.objects(concept, SKOS.prefLabel))
+            for label in labels:
+                label_map[str(label)].append(concept)
+        
+        duplicate_labels = []
+        for label, concepts_list in label_map.items():
+            if len(concepts_list) > 1:
+                concept_labels = [f"{self.get_label(c)} ({c})" for c in concepts_list[:3]]
+                duplicate_labels.append(f"'{label}' used by: {', '.join(concept_labels)}{'...' if len(concepts_list) > 3 else ''}")
+        
+        if duplicate_labels:
+            warnings.append(f"{len(duplicate_labels)} duplicate preferred labels found (valid but may cause confusion):")
+            for dup in duplicate_labels[:5]:  # Show first 5
+                warnings.append(f"  - {dup}")
+            if len(duplicate_labels) > 5:
+                warnings.append(f"  ... and {len(duplicate_labels) - 5} more")
+        
+        # 6. Check for multiple broader concepts (polyhierarchy)
+        print("Checking for polyhierarchy...")
+        polyhierarchy = []
+        for concept in concepts:
+            broaders = list(self.graph.objects(concept, SKOS.broader))
+            if len(broaders) > 1:
+                broader_labels = [self.get_label(b) for b in broaders]
+                polyhierarchy.append(f"{self.get_label(concept)} has multiple broader concepts: {', '.join(broader_labels)}")
+        
+        if polyhierarchy:
+            warnings.append(f"{len(polyhierarchy)} concepts have multiple broader concepts (polyhierarchy - valid but worth noting)")
+            for p in polyhierarchy[:3]:  # Show first 3 examples
+                warnings.append(f"  - {p}")
+            if len(polyhierarchy) > 3:
+                warnings.append(f"  ... and {len(polyhierarchy) - 3} more")
+        
+        # 7. Check for orphan concepts (no broader and not top concept)
+        print("Checking for orphan concepts...")
+        top_concepts = set()
+        for scheme in schemes:
+            top_concepts.update(self.graph.objects(scheme, SKOS.hasTopConcept))
+            top_concepts.update(self.graph.subjects(SKOS.topConceptOf, scheme))
+        
+        true_orphans = []
+        for concept in concepts:
+            broaders = list(self.graph.objects(concept, SKOS.broader))
+            if not broaders and concept not in top_concepts:
+                true_orphans.append(self.get_label(concept))
+        
+        if true_orphans:
+            warnings.append(f"{len(true_orphans)} concepts have no broader concept and are not marked as top concepts")
+        
+        # 8. Check for very deep hierarchies
+        print("Checking hierarchy depth...")
+        def get_depth(concept, visited=None):
+            if visited is None:
+                visited = set()
+            if concept in visited:
+                return 0
+            visited.add(concept)
+            
+            narrowers = list(self.graph.objects(concept, SKOS.narrower))
+            if not narrowers:
+                return 1
+            return 1 + max(get_depth(n, visited.copy()) for n in narrowers)
+        
+        deep_hierarchies = []
+        for concept in top_concepts:
+            depth = get_depth(concept)
+            if depth > 7:
+                deep_hierarchies.append(f"{self.get_label(concept)}: {depth} levels")
+        
+        if deep_hierarchies:
+            warnings.append(f"Very deep hierarchies detected:")
+            for h in deep_hierarchies:
+                warnings.append(f"  - {h}")
+        
+        # 9. Check for multiple labels of same type on single concept
+        print("Checking for multiple labels on single concepts...")
+        for concept in concepts:
+            pref_labels = list(self.graph.objects(concept, SKOS.prefLabel))
+            if len(pref_labels) > 1:
+                issues.append(f"Concept {self.get_label(concept)} has {len(pref_labels)} preferred labels (should have exactly one)")
+        
+        # Print results
+        print("\n=== Validation Results ===\n")
+        
+        if not issues and not warnings:
+            print("✓ No issues found! SKOS data appears to be well-formed.\n")
+        else:
+            if issues:
+                print(f"ERRORS ({len(issues)}):")
+                for issue in issues:
+                    print(f"  ✗ {issue}")
+                print()
+            
+            if warnings:
+                print(f"WARNINGS ({len(warnings)}):")
+                for warning in warnings:
+                    print(f"  ⚠ {warning}")
+                print()
+        
+        return len(issues) == 0  # Return True if no critical issues
+    
+    def to_notion_csv(self, output_file):
+        """Convert to CSV format suitable for Notion import"""
+        schemes, hierarchy, top_concepts, orphans_by_scheme, orphans_no_scheme = self.build_hierarchy()
+        
+        rows = []
+        processed = set()
+        
+        def add_concept_row(concept, parent_label="", level=0, scheme_label=""):
+            """Add a concept and its children to rows"""
+            # Skip if already processed
+            if concept in processed:
+                return
+                
+            processed.add(concept)
+            
+            label = self.get_label(concept)
+            definition = self.get_definition(concept)
+            alt_labels = ", ".join(self.get_alt_labels(concept))
+            notation = self.get_notation(concept)
+            
+            # Create indentation for visual hierarchy
+            indented_label = "  " * level + label
+            
+            rows.append({
+                'Title': indented_label,
+                'Parent': parent_label,
+                'Concept Scheme': scheme_label,
+                'Definition': definition,
+                'Alternative Labels': alt_labels,
+                'Notation': notation,
+                'URI': str(concept),
+                'Level': level
+            })
+            
+            # Add children in alphabetical order
+            if concept in hierarchy:
+                children = sorted(hierarchy[concept], key=lambda x: self.get_label(x))
+                for child in children:
+                    add_concept_row(child, label, level + 1, scheme_label)
+        
+        # Process each concept scheme
+        for scheme in sorted(schemes.keys(), key=lambda x: schemes[x]['label']):
+            scheme_data = schemes[scheme]
+            scheme_label = scheme_data['label']
+            
+            # Add scheme as top-level item
+            rows.append({
+                'Title': f"[SCHEME] {scheme_label}",
+                'Parent': "",
+                'Concept Scheme': scheme_label,
+                'Definition': "",
+                'Alternative Labels': "",
+                'Notation': "",
+                'URI': str(scheme),
+                'Level': 0
+            })
+            
+            # Add top concepts in alphabetical order
+            sorted_top_concepts = sorted(scheme_data['top_concepts'], key=lambda x: self.get_label(x))
+            for top_concept in sorted_top_concepts:
+                add_concept_row(top_concept, f"[SCHEME] {scheme_label}", 1, scheme_label)
+                
+            # Add orphans that belong to this scheme
+            if scheme in orphans_by_scheme and orphans_by_scheme[scheme]:
+                rows.append({
+                    'Title': f"  [Other Concepts in {scheme_label}]",
+                    'Parent': f"[SCHEME] {scheme_label}",
+                    'Concept Scheme': scheme_label,
+                    'Definition': "Concepts in this scheme without broader relations",
+                    'Alternative Labels': "",
+                    'Notation': "",
+                    'URI': "",
+                    'Level': 1
+                })
+                
+                sorted_orphans = sorted(orphans_by_scheme[scheme], key=lambda x: self.get_label(x))
+                for orphan in sorted_orphans:
+                    add_concept_row(orphan, f"[Other Concepts in {scheme_label}]", 2, scheme_label)
+        
+        # Add orphan concepts with no scheme
+        if orphans_no_scheme:
+            rows.append({
+                'Title': "[UNASSIGNED CONCEPTS]",
+                'Parent': "",
+                'Concept Scheme': "",
+                'Definition': "Concepts not associated with any concept scheme",
+                'Alternative Labels': "",
+                'Notation': "",
+                'URI': "",
+                'Level': 0
+            })
+            
+            sorted_orphans = sorted(orphans_no_scheme, key=lambda x: self.get_label(x))
+            for orphan in sorted_orphans:
+                add_concept_row(orphan, "[UNASSIGNED CONCEPTS]", 1, "")
+        
+        # Write CSV
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = ['Title', 'Parent', 'Concept Scheme', 'Definition', 
+                         'Alternative Labels', 'Notation', 'URI', 'Level']
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+            
+        print(f"Created CSV with {len(rows)} entries")
+        print(f"Processed {len(processed)} unique concepts")
+    
+    def to_notion_markdown(self, output_file):
+        """Convert to Markdown format with hierarchy for Notion import"""
+        schemes, hierarchy, top_concepts, orphans_by_scheme, orphans_no_scheme = self.build_hierarchy()
+        
+        md_content = []
+        md_content.append("# SKOS Vocabulary\n")
+        
+        # Track all processed concepts to avoid duplicates
+        processed = set()
+        
+        def add_concept_md(concept, level=1, parent_label="", use_bullets=False):
+            """Add concept to markdown with proper heading level"""
+            # Skip if already processed
+            if concept in processed:
+                return
+                
+            processed.add(concept)
+            
+            label = self.get_label(concept)
+            definition = self.get_definition(concept)
+            alt_labels = self.get_alt_labels(concept)
+            notation = self.get_notation(concept)
+            
+            # Format based on level and style preference
+            if use_bullets:
+                # Bullet list style with indentation
+                indent = "  " * (level - 3)
+                if level == 3:
+                    md_content.append(f"{indent}- **{label}**")
+                else:
+                    md_content.append(f"{indent}- _{label}_")
+            else:
+                # Heading style with visual indicators
+                if level <= 6:
+                    # Add visual indicators for deeper levels
+                    if level == 4:
+                        prefix = "▸ "
+                    elif level == 5:
+                        prefix = "▹ "
+                    elif level >= 6:
+                        prefix = "◦ "
+                    else:
+                        prefix = ""
+                    
+                    md_content.append(f"{'#' * min(level, 6)} {prefix}{label}\n")
+                else:
+                    # For levels deeper than 6, use bold with indentation
+                    indent = "  " * (level - 6)
+                    md_content.append(f"{indent}**◦ {label}**\n")
+            
+            # Add metadata with slight indentation for readability
+            metadata_indent = "  " if use_bullets else ""
+            
+            if notation:
+                md_content.append(f"{metadata_indent}_Notation:_ `{notation}`  ")
+            if definition:
+                md_content.append(f"{metadata_indent}_Definition:_ {definition}  ")
+            if alt_labels:
+                md_content.append(f"{metadata_indent}_Alternative Labels:_ {', '.join(alt_labels)}  ")
+            
+            # Add URI in smaller text
+            md_content.append(f"{metadata_indent}<sub>URI: {concept}</sub>\n")
+            
+            # Add children in alphabetical order
+            if concept in hierarchy:
+                children = sorted(hierarchy[concept], key=lambda x: self.get_label(x))
+                # Add a blank line before children for better readability
+                if children and not use_bullets:
+                    md_content.append("")
+                for child in children:
+                    add_concept_md(child, level + 1, label, use_bullets)
+        
+        # Process concept schemes
+        for scheme in sorted(schemes.keys(), key=lambda x: schemes[x]['label']):
+            scheme_data = schemes[scheme]
+            md_content.append(f"## 📂 Concept Scheme: {scheme_data['label']}\n")
+            md_content.append(f"<sub>URI: {scheme}</sub>\n")
+            md_content.append("---\n")
+            
+            # Add top concepts in alphabetical order
+            sorted_top_concepts = sorted(scheme_data['top_concepts'], key=lambda x: self.get_label(x))
+            for i, top_concept in enumerate(sorted_top_concepts):
+                if i > 0:
+                    md_content.append("")  # Add spacing between top concepts
+                add_concept_md(top_concept, 3, use_bullets=False)
+                
+            # Add orphans that belong to this scheme
+            if scheme in orphans_by_scheme and orphans_by_scheme[scheme]:
+                md_content.append(f"\n### 📁 Other Concepts in {scheme_data['label']}\n")
+                md_content.append("_Concepts in this scheme without broader relations or top concept designation_\n")
+                sorted_orphans = sorted(orphans_by_scheme[scheme], key=lambda x: self.get_label(x))
+                for orphan in sorted_orphans:
+                    add_concept_md(orphan, 4, use_bullets=False)
+        
+        # Add orphans with no scheme
+        if orphans_no_scheme:
+            md_content.append("\n## 📄 Unassigned Concepts\n")
+            md_content.append("_Concepts not associated with any concept scheme_\n")
+            sorted_orphans = sorted(orphans_no_scheme, key=lambda x: self.get_label(x))
+            for orphan in sorted_orphans:
+                add_concept_md(orphan, 3, use_bullets=False)
+        
+        # Add a table of contents at the beginning
+        toc = ["## Table of Contents\n"]
+        for scheme in sorted(schemes.keys(), key=lambda x: schemes[x]['label']):
+            scheme_label = schemes[scheme]['label']
+            toc.append(f"- [{scheme_label}](#concept-scheme-{scheme_label.lower().replace(' ', '-')})")
+        if orphans_no_scheme:
+            toc.append("- [Unassigned Concepts](#unassigned-concepts)")
+        toc.append("\n---\n")
+        
+        # Insert TOC after main title
+        md_content[1:1] = toc
+        
+        # Write markdown with custom CSS for Notion
+        final_content = []
+        
+        # Add custom formatting instructions at the top
+        final_content.append("<!-- ")
+        final_content.append("NOTION IMPORT TIPS:")
+        final_content.append("1. Use Cmd/Ctrl+Shift+V to paste and preserve formatting")
+        final_content.append("2. Convert to toggle lists: highlight text and press Cmd/Ctrl+Shift+7")
+        final_content.append("3. Use synced blocks for concepts that appear in multiple places")
+        final_content.append("-->\n")
+        
+        final_content.extend(md_content)
+        
+        # Write markdown
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(final_content))
+            
+        print(f"Created Markdown file: {output_file}")
+        print(f"Processed {len(processed)} unique concepts")
+    
+    def to_notion_json(self, output_file):
+        """Convert to JSON format that can be processed for Notion API"""
+        schemes, hierarchy, top_concepts, orphans_by_scheme, orphans_no_scheme = self.build_hierarchy()
+        
+        notion_data = {
+            "vocabulary": {
+                "schemes": [],
+                "concepts": []
+            }
+        }
+        
+        processed = set()
+        
+        def build_concept_dict(concept, parent_id=None):
+            """Build concept dictionary"""
+            if concept in processed:
+                return None
+                
+            processed.add(concept)
+            
+            concept_id = str(concept).replace('/', '_').replace('#', '_')
+            concept_dict = {
+                "id": concept_id,
+                "title": self.get_label(concept),
+                "parent_id": parent_id,
+                "definition": self.get_definition(concept),
+                "alternative_labels": self.get_alt_labels(concept),
+                "notation": self.get_notation(concept),
+                "uri": str(concept),
+                "children": []
+            }
+            
+            # Add children in alphabetical order
+            if concept in hierarchy:
+                children = sorted(hierarchy[concept], key=lambda x: self.get_label(x))
+                for child in children:
+                    child_dict = build_concept_dict(child, concept_id)
+                    if child_dict:
+                        concept_dict["children"].append(child_dict)
+                        notion_data["vocabulary"]["concepts"].append(child_dict)
+            
+            return concept_dict
+        
+        # Process schemes in alphabetical order
+        for scheme in sorted(schemes.keys(), key=lambda x: schemes[x]['label']):
+            scheme_data = schemes[scheme]
+            scheme_id = str(scheme).replace('/', '_').replace('#', '_')
+            scheme_dict = {
+                "id": scheme_id,
+                "title": scheme_data['label'],
+                "uri": str(scheme),
+                "top_concepts": [],
+                "other_concepts": []
+            }
+            
+            # Add top concepts in alphabetical order
+            sorted_top_concepts = sorted(scheme_data['top_concepts'], key=lambda x: self.get_label(x))
+            for top_concept in sorted_top_concepts:
+                concept_dict = build_concept_dict(top_concept, scheme_id)
+                if concept_dict:
+                    scheme_dict["top_concepts"].append(concept_dict)
+                    notion_data["vocabulary"]["concepts"].append(concept_dict)
+                    
+            # Add orphans that belong to this scheme
+            if scheme in orphans_by_scheme and orphans_by_scheme[scheme]:
+                sorted_orphans = sorted(orphans_by_scheme[scheme], key=lambda x: self.get_label(x))
+                for orphan in sorted_orphans:
+                    concept_dict = build_concept_dict(orphan, scheme_id)
+                    if concept_dict:
+                        scheme_dict["other_concepts"].append(concept_dict)
+                        notion_data["vocabulary"]["concepts"].append(concept_dict)
+            
+            notion_data["vocabulary"]["schemes"].append(scheme_dict)
+            
+        # Add orphans with no scheme
+        if orphans_no_scheme:
+            sorted_orphans = sorted(orphans_no_scheme, key=lambda x: self.get_label(x))
+            unassigned_concepts = []
+            for orphan in sorted_orphans:
+                concept_dict = build_concept_dict(orphan, None)
+                if concept_dict:
+                    unassigned_concepts.append(concept_dict)
+                    notion_data["vocabulary"]["concepts"].append(concept_dict)
+                    
+            if unassigned_concepts:
+                notion_data["vocabulary"]["unassigned_concepts"] = unassigned_concepts
+        
+        # Write JSON
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(notion_data, f, indent=2, ensure_ascii=False)
+            
+        print(f"Created JSON file: {output_file}")
+        print(f"Processed {len(processed)} unique concepts")
+
+
+class NotionToSKOSConverter:
+    def __init__(self, namespace_uri="http://example.org/vocabulary#", prefix="ex"):
+        self.namespace_uri = namespace_uri.rstrip('#/') + '#'
+        self.prefix = prefix
+        self.namespace = Namespace(self.namespace_uri)
+        self.graph = Graph()
+        self.graph.bind(prefix, self.namespace)
+        self.graph.bind('skos', SKOS)
+        self.graph.bind('rdf', RDF)
+        self.graph.bind('rdfs', RDFS)
+        self.existing_uris = {}  # Track label to URI mapping
+        
+    def parse_markdown(self, file_path):
+        """Parse Notion markdown file and build SKOS graph"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            print(f"❌ Error: Markdown file not found: {file_path}")
+            raise
+        except PermissionError:
+            print(f"❌ Error: Permission denied reading file: {file_path}")
+            raise
+        except UnicodeDecodeError as e:
+            print(f"❌ Error: File encoding issue - {e}")
+            print("   Try saving the file with UTF-8 encoding")
+            raise
+        except Exception as e:
+            print(f"❌ Error reading markdown file: {type(e).__name__}: {e}")
+            raise
+        
+        current_scheme = None
+        current_parent_stack = []  # Stack to track hierarchy
+        current_level = 0
+        i = 0
+        
+        print(f"\nParsing markdown file: {file_path}")
+        print(f"Using namespace: {self.namespace_uri}")
+        print(f"Using prefix: {self.prefix}\n")
+        
+        try:
+            while i < len(lines):
+                line = lines[i].strip()
+                
+                # Skip empty lines and comments
+                if not line or line.startswith('<!--'):
+                    i += 1
+                    continue
+                    
+                # Skip table of contents
+                if line == "## Table of Contents":
+                    while i < len(lines) and not lines[i].strip().startswith('#'):
+                        i += 1
+                    continue
+                
+                # Parse headers
+                header_match = re.match(r'^(#+)\s+(.+)$', line)
+                if header_match:
+                    level = len(header_match.group(1))
+                    title = header_match.group(2)
+                    
+                    # Remove visual indicators
+                    title = re.sub(r'^[▸▹◦📂📁📄]\s*', '', title)
+                    
+                    # Skip special sections
+                    if title.startswith('[') or title.startswith('Other Concepts') or title == 'Unassigned Concepts':
+                        i += 1
+                        continue
+                    
+                    # Extract metadata from following lines
+                    definition = None
+                    alt_labels = []
+                    notation = None
+                    existing_uri = None
+                    
+                    j = i + 1
+                    while j < len(lines) and not lines[j].strip().startswith('#'):
+                        metadata_line = lines[j].strip()
+                        
+                        # Parse definition
+                        if metadata_line.startswith('_Definition:_') or metadata_line.startswith('**Definition:**'):
+                            definition = metadata_line.split(':', 1)[1].strip()
+                        
+                        # Parse alternative labels
+                        elif metadata_line.startswith('_Alternative Labels:_') or metadata_line.startswith('**Alternative Labels:**'):
+                            alt_text = metadata_line.split(':', 1)[1].strip()
+                            alt_labels = [label.strip() for label in alt_text.split(',') if label.strip()]
+                        
+                        # Parse notation
+                        elif metadata_line.startswith('_Notation:_') or metadata_line.startswith('**Notation:**'):
+                            notation = metadata_line.split(':', 1)[1].strip().strip('`')
+                        
+                        # Parse existing URI
+                        elif metadata_line.startswith('<sub>URI:') or metadata_line.startswith('**URI:**'):
+                            uri_text = metadata_line
+                            uri_text = re.sub(r'<sub>URI:\s*|</sub>|URI:\s*|\*\*URI:\*\*\s*|`', '', uri_text).strip()
+                            if uri_text and uri_text != 'None':
+                                existing_uri = uri_text
+                        
+                        j += 1
+                    
+                    # Process based on level
+                    if level == 1:  # H1 = Concept Scheme
+                        if title.lower().startswith('concept scheme:'):
+                            title = title.split(':', 1)[1].strip()
+                        
+                        # Create or reuse URI
+                        if existing_uri:
+                            scheme_uri = URIRef(existing_uri)
+                        else:
+                            scheme_uri = self.namespace[self._create_uri_fragment(title)]
+                        
+                        current_scheme = scheme_uri
+                        self.existing_uris[title] = scheme_uri
+                        
+                        # Add to graph
+                        self.graph.add((scheme_uri, RDF.type, SKOS.ConceptScheme))
+                        self.graph.add((scheme_uri, SKOS.prefLabel, Literal(title)))
+                        
+                        # Reset hierarchy tracking
+                        current_parent_stack = [(1, scheme_uri, title)]
+                        
+                    elif level >= 2 and current_scheme:  # H2+ = Concepts
+                        # Create or reuse concept URI
+                        if existing_uri:
+                            concept_uri = URIRef(existing_uri)
+                        else:
+                            # Generate new UUID-based URI
+                            concept_id = str(uuid.uuid4())
+                            concept_uri = self.namespace[concept_id]
+                        
+                        self.existing_uris[title] = concept_uri
+                        
+                        # Add basic concept info
+                        self.graph.add((concept_uri, RDF.type, SKOS.Concept))
+                        self.graph.add((concept_uri, SKOS.prefLabel, Literal(title)))
+                        self.graph.add((concept_uri, SKOS.inScheme, current_scheme))
+                        
+                        # Add definition (or placeholder)
+                        if definition:
+                            self.graph.add((concept_uri, SKOS.definition, Literal(definition)))
+                        else:
+                            self.graph.add((concept_uri, SKOS.definition, Literal("Lorem ipsum")))
+                        
+                        # Add alternative labels
+                        for alt_label in alt_labels:
+                            self.graph.add((concept_uri, SKOS.altLabel, Literal(alt_label)))
+                        
+                        # Add notation if present
+                        if notation:
+                            self.graph.add((concept_uri, SKOS.notation, Literal(notation)))
+                        
+                        # Update parent stack to current level
+                        while current_parent_stack and current_parent_stack[-1][0] >= level:
+                            current_parent_stack.pop()
+                        
+                        # Establish relationships
+                        if level == 2:  # H2 = Top Concept
+                            self.graph.add((current_scheme, SKOS.hasTopConcept, concept_uri))
+                            self.graph.add((concept_uri, SKOS.topConceptOf, current_scheme))
+                        else:  # H3+ = narrower concepts
+                            if current_parent_stack:
+                                parent_uri = current_parent_stack[-1][1]
+                                self.graph.add((concept_uri, SKOS.broader, parent_uri))
+                                self.graph.add((parent_uri, SKOS.narrower, concept_uri))
+                        
+                        # Add to stack for potential children
+                        current_parent_stack.append((level, concept_uri, title))
+                    
+                    elif level >= 2 and not current_scheme:
+                        print(f"⚠️  Warning: Found concept '{title}' at line {i+1} without a concept scheme (H1)")
+                        print("   Skipping this concept...")
+                    
+                    current_level = level
+                
+                i += 1
+                
+        except Exception as e:
+            print(f"\n❌ Error parsing markdown at line {i+1}: {type(e).__name__}")
+            print(f"   Details: {e}")
+            if i < len(lines):
+                print(f"   Line {i+1}: {lines[i].strip()}")
+            raise
+        
+        print(f"Parsed {len(self.graph)} triples")
+        return self.graph
+    
+    def _create_uri_fragment(self, label):
+        """Create a URI fragment from a label"""
+        # Simple conversion: lowercase, replace spaces with underscores
+        fragment = re.sub(r'[^\w\s-]', '', label)
+        fragment = re.sub(r'\s+', '_', fragment)
+        return fragment.lower()
+    
+    def export_turtle(self, output_file):
+        """Export the graph as Turtle"""
+        turtle_content = self.graph.serialize(format='turtle')
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(turtle_content)
+        
+        print(f"\nExported SKOS Turtle to: {output_file}")
+        print(f"Total triples: {len(self.graph)}")
+        
+        # Count resources
+        concepts = set(self.graph.subjects(RDF.type, SKOS.Concept))
+        schemes = set(self.graph.subjects(RDF.type, SKOS.ConceptScheme))
+        print(f"Concept Schemes: {len(schemes)}")
+        print(f"Concepts: {len(concepts)}")
+        
+        # Show sample output
+        print("\nFirst few lines of output:")
+        print("=" * 50)
+        lines = turtle_content.splitlines()
+        for line in lines[:20]:
+            print(line)
+        if len(lines) > 20:
+            print("...")
+            print("=" * 50)
+
+
+def main():
+    print("Starting SKOS-Notion Converter...")
+    
+    try:
+        parser = argparse.ArgumentParser(description='Convert between SKOS RDF (Turtle) and Notion-compatible formats')
+        
+        # Create subparsers for different operations
+        subparsers = parser.add_subparsers(dest='command', help='Conversion direction')
+        
+        # SKOS to Notion
+        skos_parser = subparsers.add_parser('to-notion', help='Convert SKOS Turtle to Notion formats')
+        skos_parser.add_argument('input_file', help='Input Turtle RDF file')
+        skos_parser.add_argument('--format', choices=['csv', 'markdown', 'json', 'all'], 
+                                 default='csv', help='Output format (default: csv)')
+        skos_parser.add_argument('--output', help='Output file name (without extension)')
+        skos_parser.add_argument('--skip-validation', action='store_true', 
+                                 help='Skip SKOS validation checks')
+        skos_parser.add_argument('--force', action='store_true',
+                                 help='Continue conversion even if validation finds errors')
+        skos_parser.add_argument('--markdown-style', choices=['headings', 'bullets', 'mixed'], 
+                                 default='headings', help='Markdown formatting style (default: headings)')
+        
+        # Notion to SKOS
+        notion_parser = subparsers.add_parser('to-skos', help='Convert Notion markdown to SKOS Turtle')
+        notion_parser.add_argument('input_file', help='Input Notion markdown file')
+        notion_parser.add_argument('--output', help='Output file name (default: input_skos.ttl)')
+        notion_parser.add_argument('--namespace', default='http://example.org/vocabulary#',
+                                   help='Namespace URI for new concepts (default: http://example.org/vocabulary#)')
+        notion_parser.add_argument('--prefix', default='ex',
+                                   help='Namespace prefix (default: ex)')
+        
+        print("Parsing command line arguments...")
+        args = parser.parse_args()
+        print(f"Parsed args: {args}")
+        
+        if not args.command:
+            print("No command specified. Showing help...")
+            parser.print_help()
+            return 0
+        
+        if args.command == 'to-notion':
+            print(f"\nProcessing SKOS to Notion conversion...")
+            print(f"Input file: {args.input_file}")
+            
+            # Check if input file exists
+            if not os.path.exists(args.input_file):
+                print(f"❌ Error: Input file not found: {args.input_file}")
+                print(f"   Current directory: {os.getcwd()}")
+                return 1
+            
+            print(f"Input file exists: {os.path.abspath(args.input_file)}")
+            
+            # Original functionality
+            if args.output:
+                base_output = args.output
+            else:
+                base_output = args.input_file.rsplit('.', 1)[0] + '_notion'
+            
+            print(f"Output base name: {base_output}")
+            
+            converter = SKOSToNotionConverter()
+            
+            try:
+                print("Loading Turtle file...")
+                converter.load_turtle(args.input_file)
+            except Exception as e:
+                print(f"\n❌ Failed to load Turtle file")
+                return 1
+            
+            # Store markdown style preference
+            if hasattr(args, 'markdown_style'):
+                converter.markdown_style = args.markdown_style
+            
+            # Run validation unless skipped
+            if not args.skip_validation:
+                is_valid = converter.validate_skos()
+                
+                if not is_valid and not args.force:
+                    print("\n❌ Validation found critical errors. Conversion aborted.")
+                    print("   Use --force to convert anyway, or fix the issues and try again.")
+                    print("   Use --skip-validation to skip validation entirely.\n")
+                    return 1
+                elif not is_valid and args.force:
+                    print("\n⚠️  Continuing with conversion despite errors...\n")
+            
+            try:
+                if args.format in ['csv', 'all']:
+                    converter.to_notion_csv(f"{base_output}.csv")
+                    
+                if args.format in ['markdown', 'all']:
+                    converter.to_notion_markdown(f"{base_output}.md")
+                    
+                if args.format in ['json', 'all']:
+                    converter.to_notion_json(f"{base_output}.json")
+            except Exception as e:
+                print(f"\n❌ Error during conversion: {type(e).__name__}")
+                print(f"   Details: {e}")
+                import traceback
+                traceback.print_exc()
+                return 1
+            
+            print("\nConversion complete!")
+            print("\nNotion Import Instructions:")
+            print("1. For CSV: Import into Notion as a table database")
+            print("   - Use 'Title' as the page title")
+            print("   - 'Parent' column creates hierarchy")
+            print("   - Filter/group by 'Concept Scheme' or 'Level'")
+            print("2. For Markdown: Copy/paste into Notion page")
+            print("   - Hierarchy preserved as nested headings")
+            print("   - Use Cmd/Ctrl+Shift+7 to convert to toggle lists")
+            print("3. For JSON: Use with Notion API for programmatic import")
+            
+        elif args.command == 'to-skos':
+            # Notion to SKOS conversion
+            if args.output:
+                output_file = args.output
+            else:
+                output_file = args.input_file.rsplit('.', 1)[0] + '_skos.ttl'
+            
+            # Prompt for namespace if using default
+            if args.namespace == 'http://example.org/vocabulary#':
+                print("\n" + "="*60)
+                print("NAMESPACE CONFIGURATION")
+                print("="*60)
+                print(f"Current namespace: {args.namespace}")
+                print(f"Current prefix: {args.prefix}")
+                print("\nPress Enter to use these defaults, or type new values:")
+                
+                new_namespace = input("Namespace URI [http://example.org/vocabulary#]: ").strip()
+                if new_namespace:
+                    args.namespace = new_namespace
+                    
+                new_prefix = input("Namespace prefix [ex]: ").strip()
+                if new_prefix:
+                    args.prefix = new_prefix
+            
+            converter = NotionToSKOSConverter(namespace_uri=args.namespace, prefix=args.prefix)
+            
+            try:
+                converter.parse_markdown(args.input_file)
+            except Exception as e:
+                print(f"\n❌ Failed to parse markdown file")
+                return 1
+                
+            try:
+                converter.export_turtle(output_file)
+            except Exception as e:
+                print(f"\n❌ Error exporting Turtle: {type(e).__name__}")
+                print(f"   Details: {e}")
+                return 1
+            
+            print("\n✅ Notion to SKOS conversion complete!")
+            print("\nConversion rules applied:")
+            print("- H1 headers → SKOS Concept Schemes")
+            print("- H2 headers → Top Concepts")
+            print("- H3+ headers → Narrower concepts with broader relationships")
+            print("- All concepts have skos:inScheme relationship")
+            print("- New concepts assigned UUID-based URIs")
+            print("- Missing definitions replaced with 'Lorem ipsum'")
+            
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Conversion cancelled by user")
+        return 1
+    except Exception as e:
+        print(f"\n❌ Unexpected error: {type(e).__name__}")
+        print(f"   Details: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+    
+    return 0
+
+
+if __name__ == "__main__":
+    print(f"Python version: {sys.version}")
+    print(f"Command line arguments: {sys.argv}")
+    
+    exit_code = main()
+    sys.exit(exit_code if exit_code else 0)
