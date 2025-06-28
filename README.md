@@ -1,6 +1,6 @@
-# SKOS-Notion Converter
+# SKOS Converter
 
-A bidirectional converter between SKOS (Simple Knowledge Organization System) RDF vocabularies and Notion-compatible formats. This tool enables knowledge engineers to manage controlled vocabularies and thesauri in Notion's user-friendly interface while maintaining standards-compliant SKOS data.
+A bidirectional converter between SKOS (Simple Knowledge Organization System) RDF vocabularies and common formats for visual editors like Notion. This tool enables knowledge engineers to manage controlled vocabularies and thesauri in a user-friendly interface while maintaining standards-compliant SKOS data.
 
 ## Features
 
