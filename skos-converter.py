@@ -43,12 +43,12 @@ class SKOSToNotionConverter:
         except (ValueError, TypeError, AttributeError) as e:
             self._handle_parse_error(file_path, e)
             raise
-            
+
     def _handle_parse_error(self, file_path, error):
         """Handle parsing errors with detailed information."""
         error_type = type(error).__name__
         error_msg = str(error)
-        
+
         print(f"❌ Error parsing Turtle file: {error_type}")
         print(f"   Details: {error_msg}")
         
@@ -58,7 +58,7 @@ class SKOSToNotionConverter:
             line_num = line_match.group(1)
             print(f"   Error at line: {line_num}")
             self._show_error_context(file_path, int(line_num))
-        
+
         print("\n📌 Common Turtle syntax issues:")
         print("   - Missing '.' at the end of statements")
         print("   - Missing ';' between properties of the same subject")
@@ -67,7 +67,7 @@ class SKOSToNotionConverter:
         print("   - Invalid escape sequences in strings")
         print("   - Malformed prefixes or namespaces")
         print("\n💡 Tip: Try validating your Turtle file at: http://ttl.summerofcode.be/")
-        
+
     def _show_error_context(self, file_path, line_num):
         """Show context around error line."""
         try:
@@ -82,7 +82,7 @@ class SKOSToNotionConverter:
                         print(f"   Line {line_num+1}: {lines[line_idx+1].strip()}")
         except (IOError, OSError):
             pass
-        
+
     def get_label(self, uri):
         """Get preferred label for a concept"""
         labels = list(self.graph.objects(uri, SKOS.prefLabel))
@@ -98,7 +98,7 @@ class SKOSToNotionConverter:
             return str(labels[0])
         # Last resort: use local part of URI
         return str(uri).split('/')[-1].split('#')[-1]
-    
+
     def get_definition(self, uri):
         """Get definition for a concept"""
         definitions = list(self.graph.objects(uri, SKOS.definition))
@@ -109,44 +109,44 @@ class SKOSToNotionConverter:
         if notes:
             return str(notes[0])
         return ""
-    
+
     def get_alt_labels(self, uri):
         """Get alternative labels"""
         alt_labels = list(self.graph.objects(uri, SKOS.altLabel))
         return [str(label) for label in alt_labels]
-    
+
     def get_notation(self, uri):
         """Get notation/code for a concept"""
         notations = list(self.graph.objects(uri, SKOS.notation))
         return str(notations[0]) if notations else ""
-    
+
     def build_hierarchy(self):
         """Build hierarchical structure from SKOS broader/narrower relations"""
         hierarchy = defaultdict(list)
         all_concepts = set()
         top_concepts = set()
         concept_to_scheme = {}  # Track which scheme each concept belongs to
-        
+
         # Find all concepts
         for s in self.graph.subjects(RDF.type, SKOS.Concept):
             all_concepts.add(s)
-            
+
         # Find concept schemes and their top concepts
         schemes = self._build_concept_schemes(all_concepts, concept_to_scheme, top_concepts)
-        
+
         # Build parent-child relationships
         self._build_parent_child_relationships(all_concepts, hierarchy)
-        
+
         # Detect and fix circular references
         self._detect_circular_references(all_concepts, hierarchy)
-        
+
         # Find orphan concepts
         orphans_by_scheme, orphans_no_scheme = self._find_orphan_concepts(
             all_concepts, top_concepts, hierarchy, concept_to_scheme
         )
-        
+
         return schemes, hierarchy, top_concepts, orphans_by_scheme, orphans_no_scheme
-    
+
     def _build_concept_schemes(self, all_concepts, concept_to_scheme, top_concepts):
         """Build concept schemes dictionary."""
         schemes = {}
@@ -156,42 +156,42 @@ class SKOSToNotionConverter:
                 'label': scheme_label,
                 'top_concepts': set()
             }
-            
+
             # Get top concepts via hasTopConcept
             for top_concept in self.graph.objects(scheme, SKOS.hasTopConcept):
                 schemes[scheme]['top_concepts'].add(top_concept)
                 top_concepts.add(top_concept)
                 concept_to_scheme[top_concept] = scheme
-                
+
             # Get top concepts via topConceptOf
             for top_concept in self.graph.subjects(SKOS.topConceptOf, scheme):
                 schemes[scheme]['top_concepts'].add(top_concept)
                 top_concepts.add(top_concept)
                 concept_to_scheme[top_concept] = scheme
-                
+
             # Get concepts via inScheme
             for concept in self.graph.subjects(SKOS.inScheme, scheme):
                 concept_to_scheme[concept] = scheme
-                
+
         return schemes
-    
+
     def _build_parent_child_relationships(self, all_concepts, hierarchy):
         """Build parent-child relationships ensuring each child appears only once."""
         children_assigned = set()
-        
+
         for concept in all_concepts:
             # Get narrower concepts (children)
             for narrower in self.graph.objects(concept, SKOS.narrower):
                 if narrower != concept and narrower not in children_assigned:
                     hierarchy[concept].append(narrower)
                     children_assigned.add(narrower)
-                    
+
             # Get via broader relations (inverse) - only if not already assigned
             for child in self.graph.subjects(SKOS.broader, concept):
                 if child != concept and child not in children_assigned and child not in hierarchy[concept]:
                     hierarchy[concept].append(child)
                     children_assigned.add(child)
-    
+
     def _detect_circular_references(self, all_concepts, hierarchy):
         """Detect and remove circular references."""
         def has_circular_reference(node, visited, path):
@@ -209,11 +209,11 @@ class SKOSToNotionConverter:
                     return False
             path.remove(node)
             return False
-        
+
         # Check all nodes for circular references
         for concept in all_concepts:
             has_circular_reference(concept, set(), set())
-    
+
     def _find_orphan_concepts(self, all_concepts, top_concepts, hierarchy, concept_to_scheme):
         """Find orphan concepts grouped by scheme."""
         # Find orphan concepts
@@ -221,40 +221,40 @@ class SKOSToNotionConverter:
         children_assigned = set()
         for parent in hierarchy:
             children_assigned.update(hierarchy[parent])
-            
+
         for concept in all_concepts:
             has_broader = bool(list(self.graph.objects(concept, SKOS.broader)))
             is_top = concept in top_concepts
             is_child = concept in children_assigned
-            
+
             if not has_broader and not is_top and not is_child:
                 orphans.add(concept)
-        
+
         # Group orphans by scheme
         orphans_by_scheme = defaultdict(set)
         orphans_no_scheme = set()
-        
+
         for orphan in orphans:
             if orphan in concept_to_scheme:
                 orphans_by_scheme[concept_to_scheme[orphan]].add(orphan)
             else:
                 orphans_no_scheme.add(orphan)
-                
+
         return orphans_by_scheme, orphans_no_scheme
-    
+
     def validate_skos(self):
         """Validate SKOS data and report issues"""
         print("\n=== SKOS Validation Report ===\n")
-        
+
         issues = []
         warnings = []
-        
+
         # Track all concepts and schemes
         concepts = set(self.graph.subjects(RDF.type, SKOS.Concept))
         schemes = set(self.graph.subjects(RDF.type, SKOS.ConceptScheme))
-        
+
         print(f"Found {len(concepts)} concepts and {len(schemes)} concept schemes\n")
-        
+
         # Run validation checks
         self._check_duplicate_uris(concepts, schemes, issues)
         self._check_missing_labels(concepts, issues)
@@ -265,12 +265,12 @@ class SKOSToNotionConverter:
         self._check_orphan_concepts(concepts, schemes, warnings)
         self._check_hierarchy_depth(schemes, warnings)
         self._check_multiple_pref_labels(concepts, issues)
-        
+
         # Print results
         self._print_validation_results(issues, warnings)
-        
+
         return len(issues) == 0  # Return True if no critical issues
-    
+
     def _check_duplicate_uris(self, concepts, schemes, issues):
         """Check for duplicate URIs."""
         print("Checking for duplicate URIs...")
@@ -278,11 +278,11 @@ class SKOSToNotionConverter:
         uri_counts = defaultdict(int)
         for resource in all_resources:
             uri_counts[str(resource)] += 1
-        
+
         for uri, count in uri_counts.items():
             if count > 1:
                 issues.append(f"Duplicate URI found {count} times: {uri}")
-    
+
     def _check_missing_labels(self, concepts, issues):
         """Check for missing labels."""
         print("Checking for missing labels...")
@@ -290,25 +290,25 @@ class SKOSToNotionConverter:
             if not list(self.graph.objects(concept, SKOS.prefLabel)):
                 if not list(self.graph.objects(concept, RDFS.label)):
                     issues.append(f"Concept {concept} has no prefLabel or rdfs:label")
-    
+
     def _check_circular_references(self, concepts, issues):
         """Check for circular broader/narrower relationships."""
         print("Checking for circular broader/narrower relationships...")
-        
+
         def find_circular_refs(start, current, path, visited_paths):
             if current in path:
                 return path + [current]
             if (start, current) in visited_paths:
                 return None
             visited_paths.add((start, current))
-            
+
             path = path + [current]
             for broader in self.graph.objects(current, SKOS.broader):
                 result = find_circular_refs(start, broader, path, visited_paths)
                 if result:
                     return result
             return None
-        
+
         circular_refs = set()
         for concept in concepts:
             visited_paths = set()
@@ -317,10 +317,10 @@ class SKOSToNotionConverter:
                 # Convert to labels for readability
                 path_labels = [self.get_label(c) for c in circular_path]
                 circular_refs.add(" -> ".join(path_labels))
-        
+
         for ref in circular_refs:
             issues.append(f"Circular reference detected: {ref}")
-    
+
     def _check_concepts_without_schemes(self, concepts, warnings):
         """Check for concepts without concept schemes."""
         print("Checking for concepts without concept schemes...")
@@ -329,11 +329,11 @@ class SKOSToNotionConverter:
             in_scheme = list(self.graph.objects(concept, SKOS.inScheme))
             if not in_scheme:
                 orphan_concepts.append(self.get_label(concept))
-        
+
         if orphan_concepts:
             warnings.append(f"{len(orphan_concepts)} concepts not associated with any concept scheme: "
                           f"{', '.join(orphan_concepts[:5])}{'...' if len(orphan_concepts) > 5 else ''}")
-    
+
     def _check_duplicate_labels(self, concepts, warnings):
         """Check for duplicate preferred labels."""
         print("Checking for duplicate preferred labels...")
@@ -342,14 +342,14 @@ class SKOSToNotionConverter:
             labels = list(self.graph.objects(concept, SKOS.prefLabel))
             for label in labels:
                 label_map[str(label)].append(concept)
-        
+    
         duplicate_labels = []
         for label, concepts_list in label_map.items():
             if len(concepts_list) > 1:
                 concept_labels = [f"{self.get_label(c)} ({c})" for c in concepts_list[:3]]
                 duplicate_labels.append(f"'{label}' used by: {', '.join(concept_labels)}"
                                       f"{'...' if len(concepts_list) > 3 else ''}")
-        
+
         if duplicate_labels:
             warnings.append(f"{len(duplicate_labels)} duplicate preferred labels found "
                           "(valid but may cause confusion):")
@@ -357,7 +357,7 @@ class SKOSToNotionConverter:
                 warnings.append(f"  - {dup}")
             if len(duplicate_labels) > 5:
                 warnings.append(f"  ... and {len(duplicate_labels) - 5} more")
-    
+
     def _check_polyhierarchy(self, concepts, warnings):
         """Check for multiple broader concepts."""
         print("Checking for polyhierarchy...")
@@ -368,7 +368,7 @@ class SKOSToNotionConverter:
                 broader_labels = [self.get_label(b) for b in broaders]
                 polyhierarchy.append(f"{self.get_label(concept)} has multiple broader concepts: "
                                    f"{', '.join(broader_labels)}")
-        
+
         if polyhierarchy:
             warnings.append(f"{len(polyhierarchy)} concepts have multiple broader concepts "
                           "(polyhierarchy - valid but worth noting)")
@@ -376,7 +376,7 @@ class SKOSToNotionConverter:
                 warnings.append(f"  - {p}")
             if len(polyhierarchy) > 3:
                 warnings.append(f"  ... and {len(polyhierarchy) - 3} more")
-    
+
     def _check_orphan_concepts(self, concepts, schemes, warnings):
         """Check for orphan concepts."""
         print("Checking for orphan concepts...")
@@ -384,50 +384,50 @@ class SKOSToNotionConverter:
         for scheme in schemes:
             top_concepts.update(self.graph.objects(scheme, SKOS.hasTopConcept))
             top_concepts.update(self.graph.subjects(SKOS.topConceptOf, scheme))
-        
+
         true_orphans = []
         for concept in concepts:
             broaders = list(self.graph.objects(concept, SKOS.broader))
             if not broaders and concept not in top_concepts:
                 true_orphans.append(self.get_label(concept))
-        
+
         if true_orphans:
             warnings.append(f"{len(true_orphans)} concepts have no broader concept "
                           "and are not marked as top concepts")
-    
+
     def _check_hierarchy_depth(self, schemes, warnings):
         """Check for very deep hierarchies."""
         print("Checking hierarchy depth...")
-        
+
         def get_depth(concept, visited=None):
             if visited is None:
                 visited = set()
             if concept in visited:
                 return 0
             visited.add(concept)
-            
+
             narrowers = list(self.graph.objects(concept, SKOS.narrower))
             if not narrowers:
                 return 1
             return 1 + max(get_depth(n, visited.copy()) for n in narrowers)
-        
+
         # Get all top concepts
         top_concepts = set()
         for scheme in schemes:
             top_concepts.update(self.graph.objects(scheme, SKOS.hasTopConcept))
             top_concepts.update(self.graph.subjects(SKOS.topConceptOf, scheme))
-        
+
         deep_hierarchies = []
         for concept in top_concepts:
             depth = get_depth(concept)
             if depth > 7:
                 deep_hierarchies.append(f"{self.get_label(concept)}: {depth} levels")
-        
+
         if deep_hierarchies:
             warnings.append("Very deep hierarchies detected:")
             for h in deep_hierarchies:
                 warnings.append(f"  - {h}")
-    
+
     def _check_multiple_pref_labels(self, concepts, issues):
         """Check for multiple preferred labels on single concept."""
         print("Checking for multiple labels on single concepts...")
@@ -436,11 +436,11 @@ class SKOSToNotionConverter:
             if len(pref_labels) > 1:
                 issues.append(f"Concept {self.get_label(concept)} has {len(pref_labels)} "
                             "preferred labels (should have exactly one)")
-    
+
     def _print_validation_results(self, issues, warnings):
         """Print validation results."""
         print("\n=== Validation Results ===\n")
-        
+
         if not issues and not warnings:
             print("✓ No issues found! SKOS data appears to be well-formed.\n")
         else:
@@ -455,30 +455,30 @@ class SKOSToNotionConverter:
                 for warning in warnings:
                     print(f"  ⚠ {warning}")
                 print()
-    
+
     def to_notion_csv(self, output_file):
         """Convert to CSV format suitable for Notion import"""
         schemes, hierarchy, _, orphans_by_scheme, orphans_no_scheme = self.build_hierarchy()
-        
+
         rows = []
         processed = set()
-        
+
         def add_concept_row(concept, parent_label="", level=0, scheme_label=""):
             """Add a concept and its children to rows"""
             # Skip if already processed
             if concept in processed:
                 return
-                
+
             processed.add(concept)
-            
+
             label = self.get_label(concept)
             definition = self.get_definition(concept)
             alt_labels = ", ".join(self.get_alt_labels(concept))
             notation = self.get_notation(concept)
-            
+
             # Create indentation for visual hierarchy
             indented_label = "  " * level + label
-            
+
             rows.append({
                 'Title': indented_label,
                 'Parent': parent_label,
@@ -489,31 +489,31 @@ class SKOSToNotionConverter:
                 'URI': str(concept),
                 'Level': level
             })
-            
+
             # Add children in alphabetical order
             if concept in hierarchy:
                 children = sorted(hierarchy[concept], key=self.get_label)
                 for child in children:
                     add_concept_row(child, label, level + 1, scheme_label)
-        
+
         # Process each concept scheme
         self._process_schemes_to_csv(schemes, rows, add_concept_row, orphans_by_scheme)
-        
+
         # Add orphan concepts with no scheme
         self._process_orphans_to_csv(orphans_no_scheme, rows, add_concept_row)
-        
+
         # Write CSV
         self._write_csv(output_file, rows)
-        
+
         print(f"Created CSV with {len(rows)} entries")
         print(f"Processed {len(processed)} unique concepts")
-    
+
     def _process_schemes_to_csv(self, schemes, rows, add_concept_row, orphans_by_scheme):
         """Process schemes for CSV output."""
         for scheme in sorted(schemes.keys(), key=lambda x: schemes[x]['label']):
             scheme_data = schemes[scheme]
             scheme_label = scheme_data['label']
-            
+
             # Add scheme as top-level item
             rows.append({
                 'Title': f"[SCHEME] {scheme_label}",
@@ -525,12 +525,12 @@ class SKOSToNotionConverter:
                 'URI': str(scheme),
                 'Level': 0
             })
-            
+
             # Add top concepts in alphabetical order
             sorted_top_concepts = sorted(scheme_data['top_concepts'], key=self.get_label)
             for top_concept in sorted_top_concepts:
                 add_concept_row(top_concept, f"[SCHEME] {scheme_label}", 1, scheme_label)
-                
+
             # Add orphans that belong to this scheme
             if scheme in orphans_by_scheme and orphans_by_scheme[scheme]:
                 rows.append({
@@ -543,11 +543,11 @@ class SKOSToNotionConverter:
                     'URI': "",
                     'Level': 1
                 })
-                
+
                 sorted_orphans = sorted(orphans_by_scheme[scheme], key=self.get_label)
                 for orphan in sorted_orphans:
                     add_concept_row(orphan, f"[Other Concepts in {scheme_label}]", 2, scheme_label)
-    
+
     def _process_orphans_to_csv(self, orphans_no_scheme, rows, add_concept_row):
         """Process orphan concepts for CSV output."""
         if orphans_no_scheme:
@@ -561,11 +561,11 @@ class SKOSToNotionConverter:
                 'URI': "",
                 'Level': 0
             })
-            
+
             sorted_orphans = sorted(orphans_no_scheme, key=self.get_label)
             for orphan in sorted_orphans:
                 add_concept_row(orphan, "[UNASSIGNED CONCEPTS]", 1, "")
-    
+
     def _write_csv(self, output_file, rows):
         """Write CSV file."""
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
@@ -574,31 +574,31 @@ class SKOSToNotionConverter:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-    
+
     def to_notion_markdown(self, output_file):
         """Convert to Markdown format with hierarchy for Notion import"""
         schemes, hierarchy, _, orphans_by_scheme, orphans_no_scheme = self.build_hierarchy()
-        
+
         md_content = []
         md_content.append("# SKOS Vocabulary\n")
-        
+
         # Track all processed concepts to avoid duplicates
         processed = set()
-        
+
         def add_concept_md(concept, level=1, use_bullets=False):
             """Add concept to markdown with proper heading level"""
             # Skip if already processed
             if concept in processed:
                 return
-                
+
             processed.add(concept)
-            
+
             # Get concept metadata
             metadata = self._get_concept_metadata(concept)
-            
+
             # Format concept based on style
             self._format_concept_markdown(md_content, metadata, level, use_bullets)
-            
+
             # Add children in alphabetical order
             if concept in hierarchy:
                 children = sorted(hierarchy[concept], key=self.get_label)
@@ -607,7 +607,7 @@ class SKOSToNotionConverter:
                     md_content.append("")
                 for child in children:
                     add_concept_md(child, level + 1, use_bullets)
-        
+
         # Add table of contents
         self._add_table_of_contents(md_content, schemes, orphans_no_scheme)
         
@@ -675,10 +675,10 @@ class SKOSToNotionConverter:
             md_content.append(f"{metadata_indent}_Definition:_ {metadata['definition']}  ")
         if metadata['alt_labels']:
             md_content.append(f"{metadata_indent}_Alternative Labels:_ {', '.join(metadata['alt_labels'])}  ")
-        
+
         # Add URI in smaller text
         md_content.append(f"{metadata_indent}<sub>URI: {metadata['uri']}</sub>\n")
-    
+
     def _add_table_of_contents(self, md_content, schemes, orphans_no_scheme):
         """Add table of contents to markdown."""
         toc = ["## Table of Contents\n"]
@@ -688,7 +688,7 @@ class SKOSToNotionConverter:
         if orphans_no_scheme:
             toc.append("- [Unassigned Concepts](#unassigned-concepts)")
         toc.append("\n---\n")
-        
+
         # Insert TOC after main title
         md_content[1:1] = toc
     
@@ -732,7 +732,7 @@ class SKOSToNotionConverter:
         final_content.append("<!-- ")
         final_content.append("NOTION IMPORT TIPS:")
         final_content.append("1. Use Cmd/Ctrl+Shift+V to paste and preserve formatting")
-        final_content.append("2. Convert to toggle lists: highlight text and press Cmd/Ctrl+Shift+7")
+        final_content.append("2. Convert to toggle lists: Cmd/Ctrl+Shift+7")
         final_content.append("3. Use synced blocks for concepts that appear in multiple places")
         final_content.append("-->\n")
         
@@ -741,20 +741,20 @@ class SKOSToNotionConverter:
         # Write markdown
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(final_content))
-    
+
     def to_notion_json(self, output_file):
         """Convert to JSON format that can be processed for Notion API"""
         schemes, hierarchy, _, orphans_by_scheme, orphans_no_scheme = self.build_hierarchy()
-        
+ 
         notion_data = {
             "vocabulary": {
                 "schemes": [],
                 "concepts": []
             }
         }
-        
+
         processed = set()
-        
+
         def build_concept_dict(concept, parent_id=None):
             """Build concept dictionary"""
             if concept in processed:
