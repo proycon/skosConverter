@@ -315,11 +315,12 @@ Contributions are welcome! Please submit issues and pull requests on GitHub.
 
 ## License
 
-[Your chosen license]
+CC0
 
 ## Acknowledgments
 
 Built with [RDFLib](https://rdflib.readthedocs.io/) for RDF processing.
+Built with assistance from Claude.ai
 
 ## Version History
 
