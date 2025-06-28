@@ -1111,7 +1111,7 @@ def main():
         
         if args.command == 'to-notion':
             return handle_to_notion_conversion(args)
-        elif args.command == 'to-skos':
+        if args.command == 'to-skos':
             return handle_to_skos_conversion(args)
             
     except KeyboardInterrupt:
@@ -1283,15 +1283,15 @@ def configure_namespace(args):
         print(f"Current namespace: {namespace}")
         print(f"Current prefix: {prefix}")
         print("\nPress Enter to use these defaults, or type new values:")
-        
+
         new_namespace = input("Namespace URI [http://example.org/vocabulary#]: ").strip()
         if new_namespace:
             namespace = new_namespace
-            
+
         new_prefix = input("Namespace prefix [ex]: ").strip()
         if new_prefix:
             prefix = new_prefix
-            
+
     return namespace, prefix
 
 
