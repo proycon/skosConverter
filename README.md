@@ -2,16 +2,21 @@
 
 A bidirectional converter between SKOS (Simple Knowledge Organization System) RDF vocabularies and common formats for visual editors like Notion. This tool enables knowledge engineers to manage controlled vocabularies and thesauri in a user-friendly interface while maintaining standards-compliant SKOS data.
 
+
 ## Features
 
 - **SKOS → Notion**: Convert SKOS Turtle files to Notion-compatible formats (Markdown, CSV, JSON)
 - **Notion → SKOS**: Convert Notion markdown exports back to SKOS Turtle
+- **Language Support**: Handle multilingual labels with language preferences
+- **Batch Processing**: Process entire directories of files
+- **Memory Optimization**: Efficient handling of large vocabularies
 - **Validation**: Comprehensive SKOS validation with error and warning detection
 - **Hierarchy Preservation**: Maintains broader/narrower relationships and concept schemes
 - **Metadata Support**: Preserves definitions, alternative labels, notations, and URIs
 - **UUID Generation**: Automatically creates unique identifiers for new concepts
 - **Circular Reference Detection**: Identifies and handles circular relationships
 - **Multiple Output Formats**: Choose between CSV, Markdown, or JSON for Notion import
+- **Pylint Compliant**: High-quality, well-formatted code
 
 ## Installation
 
@@ -22,10 +27,7 @@ A bidirectional converter between SKOS (Simple Knowledge Organization System) RD
 ### Setup
 ```bash
 # Clone or download the script
-wget https://raw.githubusercontent.com/yourusername/skos-notion-converter/main/SKOS-Notion%20Converter%20(Refactored).txt
-
-# Rename the file for easier use
-mv "SKOS-Notion Converter (Refactored).txt" skos_converter.py
+wget https://raw.githubusercontent.com/yourusername/skos-notion-converter/main/skos_converter.py
 
 # Install dependencies
 pip install rdflib
@@ -40,6 +42,7 @@ The converter uses subcommands for different conversion directions:
 
 ### Converting SKOS to Notion
 
+#### Basic Usage
 ```bash
 # Basic conversion to CSV (default)
 python3 skos_converter.py to-notion vocabulary.ttl
@@ -49,22 +52,53 @@ python3 skos_converter.py to-notion vocabulary.ttl --format markdown
 
 # Convert to all formats
 python3 skos_converter.py to-notion vocabulary.ttl --format all
+```
 
-# Skip validation
+#### Language Support
+```bash
+# Prefer French labels, fallback to English then any language
+python3 skos_converter.py to-notion vocabulary.ttl \
+  --language fr --fallback-languages en ""
+
+# Prefer German labels with multiple fallbacks
+python3 skos_converter.py to-notion vocabulary.ttl \
+  --language de --fallback-languages en fr es ""
+```
+
+#### Batch Processing
+```bash
+# Process all .ttl files in a directory
+python3 skos_converter.py to-notion dummy.ttl \
+  --batch-dir /path/to/input/directory \
+  --output-dir /path/to/output/directory \
+  --format all
+
+# Batch process with language preferences
+python3 skos_converter.py to-notion dummy.ttl \
+  --batch-dir ./vocabularies \
+  --output-dir ./notion_exports \
+  --format markdown \
+  --language en
+```
+
+#### Advanced Options
+```bash
+# Skip validation for faster processing
 python3 skos_converter.py to-notion vocabulary.ttl --skip-validation
 
-# Force conversion despite errors
+# Force conversion despite validation errors
 python3 skos_converter.py to-notion vocabulary.ttl --force
 
-# Custom output name
-python3 skos_converter.py to-notion vocabulary.ttl --output my_vocab --format all
-
-# Specify markdown style
-python3 skos_converter.py to-notion vocabulary.ttl --format markdown --markdown-style headings
+# Custom output name with specific markdown style
+python3 skos_converter.py to-notion vocabulary.ttl \
+  --output my_vocab \
+  --format markdown \
+  --markdown-style headings
 ```
 
 ### Converting Notion to SKOS
 
+#### Basic Usage
 ```bash
 # Basic conversion with default namespace
 python3 skos_converter.py to-skos notion_export.md
@@ -78,6 +112,16 @@ python3 skos_converter.py to-skos notion_export.md \
 python3 skos_converter.py to-skos notion_export.md --output my_vocab.ttl
 ```
 
+#### Batch Processing
+```bash
+# Process all .md files in a directory
+python3 skos_converter.py to-skos dummy.md \
+  --batch-dir /path/to/notion/exports \
+  --output-dir /path/to/skos/files \
+  --namespace "http://myorg.com/vocab#" \
+  --prefix "myorg"
+```
+
 ### Getting Help
 
 ```bash
@@ -89,9 +133,85 @@ python3 skos_converter.py to-notion --help
 python3 skos_converter.py to-skos --help
 ```
 
+## Language Support
+
+The converter now supports multilingual SKOS vocabularies with intelligent label selection:
+
+### Language Preferences
+- **Primary language**: Specify preferred language (e.g., `--language en`)
+- **Fallback languages**: Define fallback order (e.g., `--fallback-languages en fr de`)
+- **No language tags**: Handles labels without language tags
+- **Best match selection**: Automatically selects the best available label
+
+### Language Tag Handling
+```turtle
+# Example multilingual SKOS
+ex:concept1 skos:prefLabel "Dog"@en ;
+           skos:prefLabel "Chien"@fr ;
+           skos:prefLabel "Hund"@de .
+```
+
+With `--language fr`, the converter will prefer "Chien" over other labels.
+
+### Language Configuration Examples
+```bash
+# Prefer English, fallback to any language
+python3 skos_converter.py to-notion vocab.ttl --language en
+
+# Prefer French, fallback to English, then German, then any
+python3 skos_converter.py to-notion vocab.ttl \
+  --language fr --fallback-languages en de ""
+
+# No preference, use first available label
+python3 skos_converter.py to-notion vocab.ttl
+```
+
+## Batch Processing
+
+Process multiple files efficiently with batch processing:
+
+### Directory Structure
+```
+input_directory/
+├── vocab1.ttl
+├── vocab2.ttl
+└── vocab3.ttl
+
+output_directory/
+├── vocab1.csv
+├── vocab1.md
+├── vocab1.json
+├── vocab2.csv
+├── vocab2.md
+├── vocab2.json
+└── ...
+```
+
+### Batch Processing Features
+- **Automatic file discovery**: Finds all `.ttl` or `.md` files
+- **Progress reporting**: Shows processing status
+- **Error handling**: Continues processing if individual files fail
+- **Consistent output**: Applies same settings to all files
+- **Memory efficient**: Processes files individually to manage memory usage
+
+### Batch Examples
+```bash
+# Convert all SKOS files to all formats
+python3 skos_converter.py to-notion dummy.ttl \
+  --batch-dir ./skos_files \
+  --output-dir ./notion_ready \
+  --format all
+
+# Convert all Notion exports to SKOS
+python3 skos_converter.py to-skos dummy.md \
+  --batch-dir ./notion_exports \
+  --output-dir ./skos_output \
+  --namespace "http://example.org/vocab#"
+```
+
 ## SKOS Validation
 
-The converter performs comprehensive validation checking for:
+The converter performs comprehensive validation with detailed reporting:
 
 ### Critical Errors (block conversion by default)
 - **Duplicate URIs**: Same URI used for multiple resources
@@ -106,7 +226,93 @@ The converter performs comprehensive validation checking for:
 - **Polyhierarchy**: Concepts with multiple broader concepts
 - **Deep hierarchies**: Hierarchies deeper than 7 levels
 
-Use `--force` to convert despite critical errors, or `--skip-validation` to bypass validation entirely.
+### Validation Options
+```bash
+# Run with full validation (default)
+python3 skos_converter.py to-notion vocab.ttl
+
+# Skip validation for speed
+python3 skos_converter.py to-notion vocab.ttl --skip-validation
+
+# Continue despite errors
+python3 skos_converter.py to-notion vocab.ttl --force
+```
+
+## Memory Optimization
+
+The optimized converter includes several performance improvements:
+
+### Caching
+- **URI fragment caching**: Reuses computed URI fragments
+- **Label caching**: Caches frequently accessed labels
+- **Metadata caching**: Optimizes repeated metadata lookups
+
+### Memory Management
+- **Streaming processing**: Handles large files without loading everything into memory
+- **Efficient data structures**: Uses optimized collections for better performance
+- **Garbage collection**: Proper cleanup of temporary objects
+
+### Performance Features
+- **Batch size control**: Configurable batch sizes for processing
+- **Memory limits**: Configurable memory usage limits
+- **Progress reporting**: Shows processing progress for large files
+
+## Code Quality
+
+This version is pylint-compliant with high code quality standards:
+
+### Code Standards
+- **PEP 8 compliance**: Follows Python style guidelines
+- **Type hints**: Full type annotation for better maintainability
+- **Documentation**: Comprehensive docstrings for all functions
+- **Error handling**: Robust error handling with detailed messages
+- **Logging**: Structured logging instead of print statements
+
+### Architecture Improvements
+- **Separation of concerns**: Distinct classes for different responsibilities
+- **Configuration management**: Centralized configuration system
+- **Modular design**: Easy to extend and modify
+- **Clean interfaces**: Well-defined APIs between components
+
+## Command Line Options
+
+### to-notion subcommand:
+```
+positional arguments:
+  input_file            Input Turtle RDF file
+
+optional arguments:
+  --format {csv,markdown,json,all}
+                        Output format (default: csv)
+  --output OUTPUT       Output file name (without extension)
+  --skip-validation     Skip SKOS validation checks
+  --force              Continue conversion even if validation finds errors
+  --markdown-style {headings,bullets,mixed}
+                        Markdown formatting style (default: headings)
+  --language LANGUAGE   Preferred language for labels (e.g., en, fr, de)
+  --fallback-languages [FALLBACK_LANGUAGES ...]
+                        Fallback languages in order of preference
+  --batch-dir BATCH_DIR Process all .ttl files in directory
+  --output-dir OUTPUT_DIR
+                        Output directory for batch processing
+```
+
+### to-skos subcommand:
+```
+positional arguments:
+  input_file           Input Notion markdown file
+
+optional arguments:
+  --output OUTPUT      Output file name (default: input_skos.ttl)
+  --namespace NAMESPACE
+                       Namespace URI for new concepts 
+                       (default: http://example.org/vocabulary#)
+  --prefix PREFIX      Namespace prefix (default: ex)
+  --batch-dir BATCH_DIR
+                       Process all .md files in directory
+  --output-dir OUTPUT_DIR
+                       Output directory for batch processing
+```
 
 ## Notion Import/Export Guide
 
@@ -140,133 +346,74 @@ Use `--force` to convert despite critical errors, or `--skip-validation` to bypa
 4. Include subpages: "Everything"
 5. Extract the markdown file from the zip
 
-## Notion Markdown Format for SKOS
-
-When creating vocabularies in Notion for SKOS export, follow this structure:
-
-```markdown
-# Concept Scheme: My Vocabulary
-
-## First Top Concept
-_Definition:_ Description of this concept
-_Alternative Labels:_ Synonym1, Synonym2
-_Notation:_ CODE1
-<sub>URI: http://example.org/vocab#concept1</sub>
-
-### Narrower Concept 1
-_Definition:_ Description of narrower concept
-
-### Narrower Concept 2
-_Definition:_ Another narrower concept
-
-## Second Top Concept
-_Definition:_ Description of second top concept
-```
-
-### Formatting Rules:
-- **H1 (`#`)**: Concept Schemes (use "Concept Scheme: Name" format)
-- **H2 (`##`)**: Top Concepts
-- **H3+ (`###`, etc.)**: Narrower concepts (hierarchy based on heading level)
-- **Metadata** (all optional):
-  - `_Definition:_` or `**Definition:**` → skos:definition
-  - `_Alternative Labels:_` → skos:altLabel (comma-separated)
-  - `_Notation:_` → skos:notation
-  - `<sub>URI: ...</sub>` → Preserves existing URI
-
-### Important Notes:
-- If no definition is provided, "Lorem ipsum" will be used as placeholder
-- New concepts without URIs will be assigned UUID-based identifiers
-- Existing URIs in the markdown will be preserved during round-trip conversion
-- All concepts automatically get skos:inScheme relationship to their scheme
-
-## Output Format Examples
-
-### Markdown Output Features:
-- **Visual hierarchy indicators**: ▸ ▹ ◦ for different depths
-- **Icons**: 📂 for schemes, 📁 for grouped sections, 📄 for unassigned
-- **Table of Contents**: Auto-generated with links
-- **Metadata formatting**: Italicized with inline display
-- **URIs**: Shown in small text for reference
-- **Import tips**: Included as HTML comments at the top
-
-### CSV Output Structure:
-- **Title**: Concept label with indentation for hierarchy
-- **Parent**: Parent concept for hierarchy building
-- **Concept Scheme**: Associated scheme name
-- **Definition**: Concept definition
-- **Alternative Labels**: Comma-separated list
-- **Notation**: Code or identifier
-- **URI**: Original URI
-- **Level**: Numeric depth in hierarchy
-
-### JSON Output:
-Structured for Notion API integration with full hierarchy and relationships preserved, including:
-- Vocabulary metadata
-- Concept schemes with top concepts
-- Hierarchical concept structure
-- Unassigned concepts section
-
 ## Example Workflows
 
-### Workflow 1: Create New Vocabulary in Notion
-1. Structure your vocabulary in Notion using the markdown format
-2. Export from Notion as markdown
-3. Convert to SKOS: 
-   ```bash
-   python3 skos_converter.py to-skos export.md \
-     --namespace "http://my-domain.com/vocab#" \
-     --prefix "myprefix"
-   ```
-4. Use the generated .ttl file in your semantic web applications
+### Workflow 1: Multilingual Vocabulary Management
+```bash
+# Convert multilingual SKOS with French preference
+python3 skos_converter.py to-notion multilingual_vocab.ttl \
+  --language fr --fallback-languages en de \
+  --format markdown
 
-### Workflow 2: Edit Existing SKOS Vocabulary
-1. Convert SKOS to Notion: 
-   ```bash
-   python3 skos_converter.py to-notion vocab.ttl --format markdown
-   ```
-2. Import markdown to Notion
-3. Edit in Notion (add concepts, reorganize hierarchy, update definitions)
-4. Export from Notion
-5. Convert back: 
-   ```bash
-   python3 skos_converter.py to-skos edited_export.md \
-     --namespace "http://original-namespace.com/vocab#"
-   ```
+# Edit in Notion with French labels
+# Export and convert back preserving language
+python3 skos_converter.py to-skos edited_vocab.md \
+  --namespace "http://example.org/multilingual#"
+```
 
-### Workflow 3: Team Collaboration
-1. Convert SKOS to CSV: 
-   ```bash
-   python3 skos_converter.py to-notion vocab.ttl --format csv
-   ```
-2. Import as Notion database
-3. Share with team for collaborative editing
-4. Use database features:
-   - Comments on concepts
-   - Filters by scheme or level
-   - Sort by various properties
-   - Create different views
-5. Export and convert back to SKOS when ready
+### Workflow 2: Large-Scale Batch Processing
+```bash
+# Convert entire directory of vocabularies
+python3 skos_converter.py to-notion dummy.ttl \
+  --batch-dir ./source_vocabularies \
+  --output-dir ./notion_imports \
+  --format all \
+  --language en
 
-## Best Practices
+# After editing in Notion, convert back
+python3 skos_converter.py to-skos dummy.md \
+  --batch-dir ./notion_exports \
+  --output-dir ./updated_vocabularies \
+  --namespace "http://myorg.com/vocab#"
+```
 
-### For SKOS Files:
-1. **Validate first**: Always run without `--skip-validation` initially
-2. **Fix circular references**: These can cause infinite loops
-3. **Ensure unique URIs**: Duplicate URIs will cause data corruption
-4. **Use proper escaping**: Quote special characters in string literals
+### Workflow 3: Quality Assurance Pipeline
+```bash
+# Validate all vocabularies with strict checking
+for file in *.ttl; do
+  echo "Validating $file..."
+  python3 skos_converter.py to-notion "$file" \
+    --format csv \
+    --output "validated_$(basename "$file" .ttl)"
+done
+```
 
-### For Notion:
-1. **Consistent formatting**: Use the exact metadata format shown
-2. **Meaningful definitions**: Avoid relying on "Lorem ipsum" placeholders
-3. **Preserve URIs**: Include `<sub>URI: ...</sub>` to maintain identifiers
-4. **Check hierarchy**: Ensure heading levels correctly represent relationships
-5. **Use paste special**: Use Cmd/Ctrl+Shift+V when importing markdown
+## Performance Guidelines
 
-### For Round-trip Conversion:
-1. **Namespace consistency**: Use the same namespace when converting back
-2. **URI preservation**: Original URIs are maintained if included in markdown
-3. **Regular backups**: Keep copies of both SKOS and Notion versions
-4. **Version control**: Track changes in your vocabulary over time
+### For Large Vocabularies
+- Use batch processing for multiple files
+- Consider `--skip-validation` for initial testing
+- Use CSV format for fastest processing
+- Process files individually rather than concatenating
+
+### Memory Usage
+- Large vocabularies (>10MB) are handled efficiently
+- Batch processing uses memory per file, not total
+- Progress reporting shows memory-intensive operations
+
+### Speed Optimization
+```bash
+# Fastest processing (skip validation, CSV only)
+python3 skos_converter.py to-notion large_vocab.ttl \
+  --format csv --skip-validation
+
+# Balanced (validation, multiple formats)
+python3 skos_converter.py to-notion vocab.ttl --format all
+
+# Most thorough (validation, all formats, language processing)
+python3 skos_converter.py to-notion vocab.ttl \
+  --format all --language en --fallback-languages fr de
+```
 
 ## Troubleshooting
 
@@ -283,79 +430,52 @@ Structured for Notion API integration with full hierarchy and relationships pres
 - Run validation to identify the cycle
 - Fix the circular broader/narrower relationships
 
-**Empty output file**
-- Check that markdown has proper heading structure
-- Ensure H1 exists before H2 concepts
-- Verify the file encoding is UTF-8
+**Memory issues with large files**
+- Use batch processing instead of single large files
+- Consider `--skip-validation` for memory-intensive operations
+- Process subsets of large vocabularies
 
-**Missing concepts after conversion**
-- Check for duplicate URIs in source data
-- Verify all concepts have required properties
-- Review validation warnings
+**Language selection not working**
+- Verify language tags in source SKOS data
+- Check language code format (e.g., 'en', 'fr', not 'English')
+- Use `--fallback-languages` to see all available options
 
-**"File not found" errors**
-- Verify the input file path is correct
+**Batch processing fails**
+- Ensure input and output directories exist
 - Check file permissions
-- Ensure the file extension matches the content type
-
-### Debug Information:
-The converter includes debug output showing:
-- Python version and command line arguments
-- File paths and parsing progress
-- Number of triples/concepts processed
-- Validation results with detailed error context
-
-## Command Line Options
-
-### to-notion subcommand:
-```
-positional arguments:
-  input_file            Input Turtle RDF file
-
-optional arguments:
-  --format {csv,markdown,json,all}
-                        Output format (default: csv)
-  --output OUTPUT       Output file name (without extension)
-  --skip-validation     Skip SKOS validation checks
-  --force              Continue conversion even if validation finds errors
-  --markdown-style {headings,bullets,mixed}
-                        Markdown formatting style (default: headings)
-```
-
-### to-skos subcommand:
-```
-positional arguments:
-  input_file           Input Notion markdown file
-
-optional arguments:
-  --output OUTPUT      Output file name (default: input_skos.ttl)
-  --namespace NAMESPACE
-                       Namespace URI for new concepts 
-                       (default: http://example.org/vocabulary#)
-  --prefix PREFIX      Namespace prefix (default: ex)
-```
+- Verify file extensions (.ttl for SKOS, .md for Notion)
 
 ## Limitations
 
-1. **Language tags**: Currently doesn't preserve language tags on labels
-2. **Complex SKOS features**: Some advanced SKOS features like collections are not supported
-3. **Notion limitations**: 
+1. **Complex SKOS features**: Some advanced features like collections are not yet supported
+2. **Notion limitations**: 
    - Maximum 6 heading levels (deeper hierarchies use indentation)
    - Toggle list conversion must be done manually
-4. **Round-trip fidelity**: Some SKOS properties may be lost in conversion
-5. **File size**: Very large vocabularies may require significant memory
+3. **Language preservation**: Round-trip conversion may lose some language tag nuances
+4. **File size**: Very large vocabularies benefit from batch processing
 
 ## Contributing
 
-Contributions are welcome! Please submit issues and pull requests on GitHub.
+Contributions are welcome! The code is now pylint-compliant and well-structured for easy modification.
 
-### Areas for Improvement:
-- Language tag support
+### Development Setup
+```bash
+# Install development dependencies
+pip install rdflib pylint black
+
+# Run pylint
+pylint skos_converter.py
+
+# Format code
+black skos_converter.py
+```
+
+### Areas for Future Enhancement:
 - SKOS collections and ordered collections
+- Direct Notion API integration
 - Additional validation rules
-- Notion API direct integration
-- Batch processing multiple files
-- Performance optimization for large vocabularies
+- Performance optimizations for very large vocabularies
+- Web interface for conversions
 
 ## License
 
@@ -372,6 +492,7 @@ Built with assistance from Claude.ai
 - 1.1.0: Added validation and circular reference detection
 - 1.2.0: Improved hierarchy handling and visual formatting
 - 1.3.0: Enhanced error handling and markdown formatting options
+- 2.0.0: **Optimized version with language support, batch processing, and pylint compliance**
 
 ---
 
