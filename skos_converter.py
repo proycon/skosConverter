@@ -115,6 +115,8 @@ class SKOSValidator:
         self._check_missing_labels(concepts)
         self._check_circular_references(concepts)
         self._check_multiple_pref_labels(concepts)
+        self._check_top_concept_consistency(schemes)
+        self._check_self_references(concepts)
         self._check_concepts_without_schemes(concepts)
         self._check_duplicate_labels(concepts)
         self._check_polyhierarchy(concepts)
@@ -175,14 +177,69 @@ class SKOSValidator:
             self.issues.append(f"Circular reference detected: {ref}")
 
     def _check_multiple_pref_labels(self, concepts: Set[URIRef]):
-        """Check for multiple preferred labels on single concept."""
+        """Check for multiple preferred labels on single concept per language."""
         for concept in concepts:
+            # Group labels by language
+            labels_by_lang = defaultdict(list)
             pref_labels = list(self.graph.objects(concept, SKOS.prefLabel))
-            if len(pref_labels) > 1:
+            
+            for label in pref_labels:
+                lang = getattr(label, 'language', '') or 'no-lang'
+                labels_by_lang[lang].append(str(label))
+            
+            # Check for multiple labels per language
+            for lang, labels in labels_by_lang.items():
+                if len(labels) > 1:
+                    lang_desc = f" (language: {lang})" if lang != 'no-lang' else ""
+                    self.issues.append(
+                        f"Concept {self._get_simple_label(concept)} has "
+                        f"{len(labels)} preferred labels{lang_desc}: {', '.join(labels)}"
+                    )
+
+    def _check_top_concept_consistency(self, schemes: Set[URIRef]):
+        """Check consistency between hasTopConcept and topConceptOf relationships."""
+        for scheme in schemes:
+            # Get top concepts via hasTopConcept
+            has_top_concepts = set(self.graph.objects(scheme, SKOS.hasTopConcept))
+            
+            # Get concepts that claim this scheme as topConceptOf
+            claimed_top_concepts = set(self.graph.subjects(SKOS.topConceptOf, scheme))
+            
+            # Check for missing inverse relationships (these are warnings, not errors)
+            missing_top_concept_of = has_top_concepts - claimed_top_concepts
+            missing_has_top_concept = claimed_top_concepts - has_top_concepts
+            
+            scheme_label = self._get_simple_label(scheme)
+            
+            if missing_top_concept_of:
+                concept_labels = [self._get_simple_label(c) for c in missing_top_concept_of]
+                self.warnings.append(
+                    f"Scheme '{scheme_label}' has top concepts via hasTopConcept "
+                    f"but missing inverse topConceptOf: {', '.join(concept_labels[:3])}"
+                    f"{'...' if len(concept_labels) > 3 else ''}"
+                )
+
+    def _check_self_references(self, concepts: Set[URIRef]):
+        """Check for concepts that reference themselves as broader."""
+        for concept in concepts:
+            broaders = list(self.graph.objects(concept, SKOS.broader))
+            if concept in broaders:
                 self.issues.append(
-                    f"Concept {self._get_simple_label(concept)} has "
-                    f"{len(pref_labels)} preferred labels "
-                    "(should have exactly one per language)"
+                    f"Concept {self._get_simple_label(concept)} has itself as broader concept"
+                )
+            
+            narrowers = list(self.graph.objects(concept, SKOS.narrower))
+            if concept in narrowers:
+                self.issues.append(
+                    f"Concept {self._get_simple_label(concept)} has itself as narrower concept"
+                )
+            
+            if missing_has_top_concept:
+                concept_labels = [self._get_simple_label(c) for c in missing_has_top_concept]
+                self.warnings.append(
+                    f"Scheme '{scheme_label}' has concepts claiming topConceptOf "
+                    f"but missing hasTopConcept: {', '.join(concept_labels[:3])}"
+                    f"{'...' if len(concept_labels) > 3 else ''}"
                 )
 
     def _check_concepts_without_schemes(self, concepts: Set[URIRef]):
@@ -253,23 +310,32 @@ class SKOSValidator:
 
     def _check_orphan_concepts(self, concepts: Set[URIRef],
                                schemes: Set[URIRef]):
-        """Check for orphan concepts."""
+        """Check for orphan concepts - those with no broader and not top concepts."""
+        # Get all top concepts from both directions
         top_concepts = set()
         for scheme in schemes:
+            # Get via hasTopConcept
             top_concepts.update(self.graph.objects(scheme, SKOS.hasTopConcept))
+            # Get via topConceptOf (inverse relationship)
             top_concepts.update(self.graph.subjects(SKOS.topConceptOf, scheme))
 
         true_orphans = []
         for concept in concepts:
+            # Check if concept has broader relationships
             broaders = list(self.graph.objects(concept, SKOS.broader))
-            if not broaders and concept not in top_concepts:
+            # Check if concept is a top concept
+            is_top = concept in top_concepts
+            
+            # A concept is orphaned if it has no broader concepts AND is not a top concept
+            if not broaders and not is_top:
                 true_orphans.append(self._get_simple_label(concept))
 
         if true_orphans:
-            self.warnings.append(
-                f"{len(true_orphans)} concepts have no broader concept "
-                "and are not marked as top concepts"
-            )
+            self.warnings.append("Orphan concepts (no broader concept and not top concepts):")
+            for orphan in true_orphans[:10]:  # Show first 10
+                self.warnings.append(f"  - {orphan}")
+            if len(true_orphans) > 10:
+                self.warnings.append(f"  ... and {len(true_orphans) - 10} more")
 
     def _check_hierarchy_depth(self, schemes: Set[URIRef]):
         """Check for very deep hierarchies."""
@@ -294,14 +360,12 @@ class SKOSValidator:
         for concept in top_concepts:
             depth = get_depth(concept)
             if depth > 7:
-                deep_hierarchies.append(
-                    f"{self._get_simple_label(concept)}: {depth} levels"
-                )
+                deep_hierarchies.append((self._get_simple_label(concept), depth))
 
         if deep_hierarchies:
-            self.warnings.append("Very deep hierarchies detected:")
-            for h in deep_hierarchies:
-                self.warnings.append(f"  - {h}")
+            self.warnings.append("Very deep hierarchies detected (>7 levels):")
+            for concept_label, depth in deep_hierarchies:
+                self.warnings.append(f"  - {concept_label}: {depth} levels")
 
     def _get_simple_label(self, uri: URIRef) -> str:
         """Get simple label for URI."""
@@ -576,15 +640,16 @@ class SKOSToNotionConverter:
                 top_concepts.add(top_concept)
                 concept_to_scheme[top_concept] = scheme
 
-            # Get top concepts via topConceptOf
+            # Get top concepts via topConceptOf (inverse relationship)
             for top_concept in self.graph.subjects(SKOS.topConceptOf, scheme):
                 schemes[scheme]['top_concepts'].add(top_concept)
                 top_concepts.add(top_concept)
                 concept_to_scheme[top_concept] = scheme
 
-            # Get concepts via inScheme
+            # Get ALL concepts via inScheme (not just top concepts)
             for concept in self.graph.subjects(SKOS.inScheme, scheme):
-                concept_to_scheme[concept] = scheme
+                if concept not in concept_to_scheme:  # Only assign if not already assigned
+                    concept_to_scheme[concept] = scheme
 
         return schemes
 
