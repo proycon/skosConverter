@@ -4,7 +4,7 @@ A bidirectional converter between SKOS (Simple Knowledge Organization System) RD
 
 ## Features
 
-- **SKOS → Notion**: Convert SKOS Turtle files to Notion-compatible formats (Markdown, CSV, JSON)
+- **SKOS → Notion**: Convert SKOS Turtle files to several popular formats (Markdown, CSV, JSON)
 - **Notion → SKOS**: Convert Notion markdown exports back to SKOS Turtle
 - **Language Support**: Handle multilingual labels with language preferences
 - **Batch Processing**: Process entire directories of files

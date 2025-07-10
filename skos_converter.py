@@ -1350,7 +1350,7 @@ class NotionToSKOSConverter:
             return i
 
         # Parse headers
-        header_match = re.match(r'^(#+)\s+(.+)
+        header_match = re.match(r'^(#+)\s+(.+)$', line)
 
     def _clean_title(self, title: str) -> str:
         """Clean title by removing visual indicators."""
