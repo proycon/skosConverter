@@ -1,7 +1,6 @@
-# SKOS-Notion Converter
+# SKOS-Notion Converter (Optimized)
 
-A bidirectional converter between SKOS (Simple Knowledge Organization System) RDF vocabularies and common formats for visual editors like Notion. This tool enables knowledge engineers to manage controlled vocabularies and thesauri in a user-friendly interface while maintaining standards-compliant SKOS data.
-
+A bidirectional converter between SKOS (Simple Knowledge Organization System) RDF vocabularies and common formats for visual editors like Notion. This optimized version includes language support, batch processing, memory optimization, and pylint-compliant code.
 
 ## Features
 
@@ -15,7 +14,7 @@ A bidirectional converter between SKOS (Simple Knowledge Organization System) RD
 - **Metadata Support**: Preserves definitions, alternative labels, notations, and URIs
 - **UUID Generation**: Automatically creates unique identifiers for new concepts
 - **Circular Reference Detection**: Identifies and handles circular relationships
-- **Multiple Output Formats**: Choose between CSV, Markdown, or JSON for Notion import
+- **Multiple Output Formats**: Choose between CSV, Markdown, JSON, or Confluence XML for import
 - **Pylint Compliant**: High-quality, well-formatted code
 
 ## Installation
@@ -38,67 +37,47 @@ chmod +x skos_converter.py
 
 ## Usage
 
-The converter uses subcommands for different conversion directions:
+The converter uses subcommands for different conversion targets:
 
-### Converting SKOS to Notion
+### Converting SKOS to CSV
 
-#### Basic Usage
 ```bash
-# Basic conversion to CSV (default)
-python3 skos_converter.py to-notion vocabulary.ttl
+# Basic conversion to CSV
+python3 skos_converter.py to-csv vocabulary.ttl
 
-# Convert to Markdown with visual formatting
-python3 skos_converter.py to-notion vocabulary.ttl --format markdown
+# Custom output name
+python3 skos_converter.py to-csv vocabulary.ttl --output my_vocab
 
-# Convert to all formats
-python3 skos_converter.py to-notion vocabulary.ttl --format all
+# With language preferences
+python3 skos_converter.py to-csv vocabulary.ttl --language fr --fallback-languages en de
 ```
 
-#### Language Support
-```bash
-# Prefer French labels, fallback to English then any language
-python3 skos_converter.py to-notion vocabulary.ttl \
-  --language fr --fallback-languages en ""
+### Converting SKOS to Markdown
 
-# Prefer German labels with multiple fallbacks
-python3 skos_converter.py to-notion vocabulary.ttl \
-  --language de --fallback-languages en fr es ""
+```bash
+# Basic conversion to Markdown
+python3 skos_converter.py to-markdown vocabulary.ttl
+
+# With specific markdown style
+python3 skos_converter.py to-markdown vocabulary.ttl --markdown-style headings
 ```
 
-#### Batch Processing
-```bash
-# Process all .ttl files in a directory
-python3 skos_converter.py to-notion dummy.ttl \
-  --batch-dir /path/to/input/directory \
-  --output-dir /path/to/output/directory \
-  --format all
+### Converting SKOS to JSON
 
-# Batch process with language preferences
-python3 skos_converter.py to-notion dummy.ttl \
-  --batch-dir ./vocabularies \
-  --output-dir ./notion_exports \
-  --format markdown \
-  --language en
+```bash
+# Basic conversion to JSON
+python3 skos_converter.py to-json vocabulary.ttl
 ```
 
-#### Advanced Options
+### Converting SKOS to Confluence XML
+
 ```bash
-# Skip validation for faster processing
-python3 skos_converter.py to-notion vocabulary.ttl --skip-validation
-
-# Force conversion despite validation errors
-python3 skos_converter.py to-notion vocabulary.ttl --force
-
-# Custom output name with specific markdown style
-python3 skos_converter.py to-notion vocabulary.ttl \
-  --output my_vocab \
-  --format markdown \
-  --markdown-style headings
+# Basic conversion to Confluence XML
+python3 skos_converter.py to-confluence vocabulary.ttl
 ```
 
 ### Converting Notion to SKOS
 
-#### Basic Usage
 ```bash
 # Basic conversion with default namespace
 python3 skos_converter.py to-skos notion_export.md
@@ -107,19 +86,19 @@ python3 skos_converter.py to-skos notion_export.md
 python3 skos_converter.py to-skos notion_export.md \
   --namespace "http://data.example.com/vocab#" \
   --prefix "ex"
-
-# Custom output file
-python3 skos_converter.py to-skos notion_export.md --output my_vocab.ttl
 ```
 
-#### Batch Processing
+### Common Options for All Formats
+
 ```bash
-# Process all .md files in a directory
-python3 skos_converter.py to-skos dummy.md \
-  --batch-dir /path/to/notion/exports \
-  --output-dir /path/to/skos/files \
-  --namespace "http://myorg.com/vocab#" \
-  --prefix "myorg"
+# Skip validation
+python3 skos_converter.py to-csv vocabulary.ttl --skip-validation
+
+# Force conversion despite errors
+python3 skos_converter.py to-markdown vocabulary.ttl --force
+
+# Custom output name
+python3 skos_converter.py to-json vocabulary.ttl --output my_vocab
 ```
 
 ### Getting Help
@@ -128,8 +107,11 @@ python3 skos_converter.py to-skos dummy.md \
 # General help
 python3 skos_converter.py --help
 
-# Help for specific subcommand
-python3 skos_converter.py to-notion --help
+# Help for specific commands
+python3 skos_converter.py to-csv --help
+python3 skos_converter.py to-markdown --help
+python3 skos_converter.py to-json --help
+python3 skos_converter.py to-confluence --help
 python3 skos_converter.py to-skos --help
 ```
 
@@ -166,41 +148,21 @@ python3 skos_converter.py to-notion vocab.ttl \
 python3 skos_converter.py to-notion vocab.ttl
 ```
 
-## Batch Processing
+### Batch Processing
 
 Process multiple files efficiently with batch processing:
 
-### Directory Structure
-```
-input_directory/
-├── vocab1.ttl
-├── vocab2.ttl
-└── vocab3.ttl
-
-output_directory/
-├── vocab1.csv
-├── vocab1.md
-├── vocab1.json
-├── vocab2.csv
-├── vocab2.md
-├── vocab2.json
-└── ...
-```
-
-### Batch Processing Features
-- **Automatic file discovery**: Finds all `.ttl` or `.md` files
-- **Progress reporting**: Shows processing status
-- **Error handling**: Continues processing if individual files fail
-- **Consistent output**: Applies same settings to all files
-- **Memory efficient**: Processes files individually to manage memory usage
-
-### Batch Examples
 ```bash
-# Convert all SKOS files to all formats
-python3 skos_converter.py to-notion dummy.ttl \
+# Convert all SKOS files to CSV
+python3 skos_converter.py to-csv dummy.ttl \
   --batch-dir ./skos_files \
-  --output-dir ./notion_ready \
-  --format all
+  --output-dir ./csv_output
+
+# Convert all SKOS files to Markdown with language preference
+python3 skos_converter.py to-markdown dummy.ttl \
+  --batch-dir ./vocabularies \
+  --output-dir ./markdown_exports \
+  --language en
 
 # Convert all Notion exports to SKOS
 python3 skos_converter.py to-skos dummy.md \
@@ -217,6 +179,7 @@ The converter performs comprehensive validation with detailed reporting:
 - **Duplicate URIs**: Same URI used for multiple resources
 - **Missing labels**: Concepts without prefLabel or rdfs:label
 - **Circular references**: Concepts that reference each other in loops
+- **Self-references**: Concepts that have themselves as broader or narrower
 - **Multiple preferred labels**: More than one prefLabel per language on a concept
 
 ### Warnings (valid SKOS but worth attention)
@@ -225,6 +188,7 @@ The converter performs comprehensive validation with detailed reporting:
 - **Missing concept schemes**: Concepts not associated with any scheme
 - **Polyhierarchy**: Concepts with multiple broader concepts
 - **Deep hierarchies**: Hierarchies deeper than 7 levels
+- **Top concept inconsistency**: Mismatched hasTopConcept/topConceptOf relationships
 
 ### Validation Options
 ```bash
@@ -276,19 +240,68 @@ This version is pylint-compliant with high code quality standards:
 
 ## Command Line Options
 
-### to-notion subcommand:
+### to-csv subcommand:
 ```
 positional arguments:
   input_file            Input Turtle RDF file
 
 optional arguments:
-  --format {csv,markdown,json,all}
-                        Output format (default: csv)
+  --output OUTPUT       Output file name (without extension)
+  --skip-validation     Skip SKOS validation checks
+  --force              Continue conversion even if validation finds errors
+  --language LANGUAGE   Preferred language for labels (e.g., en, fr, de)
+  --fallback-languages [FALLBACK_LANGUAGES ...]
+                        Fallback languages in order of preference
+  --batch-dir BATCH_DIR Process all .ttl files in directory
+  --output-dir OUTPUT_DIR
+                        Output directory for batch processing
+```
+
+### to-markdown subcommand:
+```
+positional arguments:
+  input_file            Input Turtle RDF file
+
+optional arguments:
   --output OUTPUT       Output file name (without extension)
   --skip-validation     Skip SKOS validation checks
   --force              Continue conversion even if validation finds errors
   --markdown-style {headings,bullets,mixed}
                         Markdown formatting style (default: headings)
+  --language LANGUAGE   Preferred language for labels (e.g., en, fr, de)
+  --fallback-languages [FALLBACK_LANGUAGES ...]
+                        Fallback languages in order of preference
+  --batch-dir BATCH_DIR Process all .ttl files in directory
+  --output-dir OUTPUT_DIR
+                        Output directory for batch processing
+```
+
+### to-json subcommand:
+```
+positional arguments:
+  input_file            Input Turtle RDF file
+
+optional arguments:
+  --output OUTPUT       Output file name (without extension)
+  --skip-validation     Skip SKOS validation checks
+  --force              Continue conversion even if validation finds errors
+  --language LANGUAGE   Preferred language for labels (e.g., en, fr, de)
+  --fallback-languages [FALLBACK_LANGUAGES ...]
+                        Fallback languages in order of preference
+  --batch-dir BATCH_DIR Process all .ttl files in directory
+  --output-dir OUTPUT_DIR
+                        Output directory for batch processing
+```
+
+### to-confluence subcommand:
+```
+positional arguments:
+  input_file            Input Turtle RDF file
+
+optional arguments:
+  --output OUTPUT       Output file name (without extension)
+  --skip-validation     Skip SKOS validation checks
+  --force              Continue conversion even if validation finds errors
   --language LANGUAGE   Preferred language for labels (e.g., en, fr, de)
   --fallback-languages [FALLBACK_LANGUAGES ...]
                         Fallback languages in order of preference
@@ -333,10 +346,17 @@ optional arguments:
 1. Create a new Notion page
 2. Copy the entire markdown content
 3. Paste into Notion using Cmd/Ctrl+Shift+V to preserve formatting
-4. Optional: Convert to toggle lists:
-   - Select hierarchical sections
-   - Press Cmd/Ctrl+Shift+7
-5. The visual indicators (▸ ▹ ◦) help show hierarchy depth
+4. The simple hierarchical structure uses headings without extra formatting
+5. Optional: Convert to toggle lists by selecting sections and pressing Cmd/Ctrl+Shift+7
+
+#### From Confluence XML:
+1. In Confluence, go to Space Settings → Content Tools → Import
+2. Choose "Confluence XML" as import format
+3. Upload the generated XML file
+4. The content will be imported with:
+   - Expandable sections for better navigation
+   - Info panels showing URIs
+   - Structured metadata display
 
 ### Exporting from Notion
 

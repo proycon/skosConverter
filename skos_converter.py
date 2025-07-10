@@ -140,38 +140,48 @@ class SKOSValidator:
 
     def _check_missing_labels(self, concepts: Set[URIRef]):
         """Check for missing labels."""
+        missing_labels = []
         for concept in concepts:
-            if not list(self.graph.objects(concept, SKOS.prefLabel)):
-                if not list(self.graph.objects(concept, RDFS.label)):
-                    self.issues.append(
-                        f"Concept {concept} has no prefLabel or rdfs:label"
-                    )
+            has_pref_label = bool(list(self.graph.objects(concept, SKOS.prefLabel)))
+            has_rdfs_label = bool(list(self.graph.objects(concept, RDFS.label)))
+            
+            if not has_pref_label and not has_rdfs_label:
+                missing_labels.append(str(concept))
+        
+        if missing_labels:
+            for uri in missing_labels[:5]:  # Show first 5
+                self.issues.append(f"Concept {uri} has no prefLabel or rdfs:label")
+            if len(missing_labels) > 5:
+                self.issues.append(f"... and {len(missing_labels) - 5} more concepts without labels")
 
     def _check_circular_references(self, concepts: Set[URIRef]):
         """Check for circular broader/narrower relationships."""
-        def find_circular_refs(start, current, path, visited_paths):
+        def find_circular_refs(start, current, path, visited_global):
             if current in path:
                 return path + [current]
-            if (start, current) in visited_paths:
+            if current in visited_global:
                 return None
-            visited_paths.add((start, current))
-
+            
+            visited_global.add(current)
             path = path + [current]
+            
             for broader in self.graph.objects(current, SKOS.broader):
-                result = find_circular_refs(start, broader, path,
-                                            visited_paths)
+                if broader == current:  # Self-reference check moved here
+                    continue
+                result = find_circular_refs(start, broader, path, visited_global)
                 if result:
                     return result
             return None
 
         circular_refs = set()
+        visited_global = set()
+        
         for concept in concepts:
-            visited_paths = set()
-            circular_path = find_circular_refs(concept, concept, [],
-                                               visited_paths)
-            if circular_path and len(circular_path) > 2:
-                path_labels = [self._get_simple_label(c) for c in circular_path]
-                circular_refs.add(" -> ".join(path_labels))
+            if concept not in visited_global:
+                circular_path = find_circular_refs(concept, concept, [], visited_global)
+                if circular_path and len(circular_path) > 2:
+                    path_labels = [self._get_simple_label(c) for c in circular_path]
+                    circular_refs.add(" -> ".join(path_labels))
 
         for ref in circular_refs:
             self.issues.append(f"Circular reference detected: {ref}")
@@ -192,7 +202,7 @@ class SKOSValidator:
                 if len(labels) > 1:
                     lang_desc = f" (language: {lang})" if lang != 'no-lang' else ""
                     self.issues.append(
-                        f"Concept {self._get_simple_label(concept)} has "
+                        f"Concept '{self._get_simple_label(concept)}' has "
                         f"{len(labels)} preferred labels{lang_desc}: {', '.join(labels)}"
                     )
 
@@ -218,21 +228,6 @@ class SKOSValidator:
                     f"but missing inverse topConceptOf: {', '.join(concept_labels[:3])}"
                     f"{'...' if len(concept_labels) > 3 else ''}"
                 )
-
-    def _check_self_references(self, concepts: Set[URIRef]):
-        """Check for concepts that reference themselves as broader."""
-        for concept in concepts:
-            broaders = list(self.graph.objects(concept, SKOS.broader))
-            if concept in broaders:
-                self.issues.append(
-                    f"Concept {self._get_simple_label(concept)} has itself as broader concept"
-                )
-            
-            narrowers = list(self.graph.objects(concept, SKOS.narrower))
-            if concept in narrowers:
-                self.issues.append(
-                    f"Concept {self._get_simple_label(concept)} has itself as narrower concept"
-                )
             
             if missing_has_top_concept:
                 concept_labels = [self._get_simple_label(c) for c in missing_has_top_concept]
@@ -240,6 +235,21 @@ class SKOSValidator:
                     f"Scheme '{scheme_label}' has concepts claiming topConceptOf "
                     f"but missing hasTopConcept: {', '.join(concept_labels[:3])}"
                     f"{'...' if len(concept_labels) > 3 else ''}"
+                )
+
+    def _check_self_references(self, concepts: Set[URIRef]):
+        """Check for concepts that reference themselves as broader or narrower."""
+        for concept in concepts:
+            broaders = list(self.graph.objects(concept, SKOS.broader))
+            if concept in broaders:
+                self.issues.append(
+                    f"Concept '{self._get_simple_label(concept)}' has itself as broader concept"
+                )
+            
+            narrowers = list(self.graph.objects(concept, SKOS.narrower))
+            if concept in narrowers:
+                self.issues.append(
+                    f"Concept '{self._get_simple_label(concept)}' has itself as narrower concept"
                 )
 
     def _check_concepts_without_schemes(self, concepts: Set[URIRef]):
@@ -252,11 +262,12 @@ class SKOSValidator:
 
         if orphan_concepts:
             self.warnings.append(
-                f"{len(orphan_concepts)} concepts not associated with "
-                f"any concept scheme: "
-                f"{', '.join(orphan_concepts[:5])}"
-                f"{'...' if len(orphan_concepts) > 5 else ''}"
+                "Concepts not associated with any concept scheme:"
             )
+            for orphan in orphan_concepts[:10]:  # Show first 10
+                self.warnings.append(f"  - {orphan}")
+            if len(orphan_concepts) > 10:
+                self.warnings.append(f"  ... and {len(orphan_concepts) - 10} more")
 
     def _check_duplicate_labels(self, concepts: Set[URIRef]):
         """Check for duplicate preferred labels."""
@@ -269,44 +280,33 @@ class SKOSValidator:
         duplicate_labels = []
         for label, concepts_list in label_map.items():
             if len(concepts_list) > 1:
-                concept_labels = [f"{self._get_simple_label(c)} ({c})"
-                                  for c in concepts_list[:3]]
-                duplicate_labels.append(
-                    f"'{label}' used by: {', '.join(concept_labels)}"
-                    f"{'...' if len(concepts_list) > 3 else ''}"
-                )
+                duplicate_labels.append((label, concepts_list))
 
         if duplicate_labels:
-            self.warnings.append(
-                f"{len(duplicate_labels)} duplicate preferred labels found "
-                "(valid but may cause confusion):"
-            )
-            for dup in duplicate_labels[:5]:
-                self.warnings.append(f"  - {dup}")
+            self.warnings.append("Duplicate preferred labels found:")
+            for label, concepts_list in duplicate_labels[:5]:  # Show first 5
+                concept_labels = [f"{self._get_simple_label(c)}" for c in concepts_list]
+                self.warnings.append(f"  - '{label}' used by: {', '.join(concept_labels)}")
             if len(duplicate_labels) > 5:
-                self.warnings.append(f"  ... and {len(duplicate_labels) - 5} more")
+                self.warnings.append(f"  ... and {len(duplicate_labels) - 5} more duplicate labels")
 
     def _check_polyhierarchy(self, concepts: Set[URIRef]):
         """Check for multiple broader concepts."""
-        polyhierarchy = []
+        polyhierarchy_concepts = []
         for concept in concepts:
             broaders = list(self.graph.objects(concept, SKOS.broader))
             if len(broaders) > 1:
                 broader_labels = [self._get_simple_label(b) for b in broaders]
-                polyhierarchy.append(
-                    f"{self._get_simple_label(concept)} has multiple "
-                    f"broader concepts: {', '.join(broader_labels)}"
+                polyhierarchy_concepts.append(
+                    (self._get_simple_label(concept), broader_labels)
                 )
 
-        if polyhierarchy:
-            self.warnings.append(
-                f"{len(polyhierarchy)} concepts have multiple broader "
-                "concepts (polyhierarchy - valid but worth noting)"
-            )
-            for p in polyhierarchy[:3]:
-                self.warnings.append(f"  - {p}")
-            if len(polyhierarchy) > 3:
-                self.warnings.append(f"  ... and {len(polyhierarchy) - 3} more")
+        if polyhierarchy_concepts:
+            self.warnings.append("Concepts with multiple broader concepts (polyhierarchy):")
+            for concept_label, broader_labels in polyhierarchy_concepts:
+                self.warnings.append(
+                    f"  - '{concept_label}' has broader concepts: {', '.join(broader_labels)}"
+                )
 
     def _check_orphan_concepts(self, concepts: Set[URIRef],
                                schemes: Set[URIRef]):
@@ -339,17 +339,23 @@ class SKOSValidator:
 
     def _check_hierarchy_depth(self, schemes: Set[URIRef]):
         """Check for very deep hierarchies."""
-        def get_depth(concept, visited=None):
+        def get_depth(concept, visited=None, max_depth=20):
             if visited is None:
                 visited = set()
-            if concept in visited:
+            if concept in visited or max_depth <= 0:
                 return 0
             visited.add(concept)
 
             narrowers = list(self.graph.objects(concept, SKOS.narrower))
             if not narrowers:
                 return 1
-            return 1 + max(get_depth(n, visited.copy()) for n in narrowers)
+            
+            max_child_depth = 0
+            for narrower in narrowers:
+                child_depth = get_depth(narrower, visited.copy(), max_depth - 1)
+                max_child_depth = max(max_child_depth, child_depth)
+            
+            return 1 + max_child_depth
 
         top_concepts = set()
         for scheme in schemes:
@@ -367,11 +373,24 @@ class SKOSValidator:
             for concept_label, depth in deep_hierarchies:
                 self.warnings.append(f"  - {concept_label}: {depth} levels")
 
+    @lru_cache(maxsize=500)
     def _get_simple_label(self, uri: URIRef) -> str:
-        """Get simple label for URI."""
+        """Get simple label for URI with caching."""
         labels = list(self.graph.objects(uri, SKOS.prefLabel))
         if labels:
             return str(labels[0])
+        
+        # Try alternative labels
+        labels = list(self.graph.objects(uri, SKOS.altLabel))
+        if labels:
+            return str(labels[0])
+        
+        # Try rdfs:label
+        labels = list(self.graph.objects(uri, RDFS.label))
+        if labels:
+            return str(labels[0])
+        
+        # Last resort: URI fragment
         return str(uri).split('/')[-1].split('#')[-1]
 
     def _print_validation_results(self):
@@ -458,7 +477,7 @@ class BatchProcessor:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        if operation == 'to-notion':
+        if operation.startswith('to-') and operation != 'to-skos':
             pattern = "*.ttl"
         else:
             pattern = "*.md"
@@ -470,7 +489,7 @@ class BatchProcessor:
             logger.info("Processing file %d/%d: %s", i, len(files), file_path.name)
 
             try:
-                if operation == 'to-notion':
+                if operation.startswith('to-') and operation != 'to-skos':
                     self._process_skos_file(file_path, output_path, format_type)
                 else:
                     self._process_notion_file(file_path, output_path)
@@ -488,17 +507,18 @@ class BatchProcessor:
         converter.load_turtle(str(file_path))
 
         base_name = file_path.stem
-        if format_type in ['csv', 'all']:
+        if format_type == 'csv':
             output_file = output_dir / f"{base_name}.csv"
             converter.to_notion_csv(str(output_file))
-
-        if format_type in ['markdown', 'all']:
+        elif format_type == 'markdown':
             output_file = output_dir / f"{base_name}.md"
             converter.to_notion_markdown(str(output_file))
-
-        if format_type in ['json', 'all']:
+        elif format_type == 'json':
             output_file = output_dir / f"{base_name}.json"
             converter.to_notion_json(str(output_file))
+        elif format_type == 'confluence':
+            output_file = output_dir / f"{base_name}.xml"
+            converter.to_confluence_xml(str(output_file))
 
     def _process_notion_file(self, file_path: Path, output_dir: Path):
         """Process a single Notion markdown file."""
@@ -524,15 +544,18 @@ class SKOSToNotionConverter:
 
     def load_turtle(self, file_path: str):
         """Load Turtle RDF file with error handling."""
+        if not file_path:
+            raise ValueError("File path cannot be empty")
+        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+        
+        if not os.access(file_path, os.R_OK):
+            raise PermissionError(f"Permission denied reading file: {file_path}")
+        
         try:
             self.graph.parse(file_path, format='turtle')
             logger.info("Loaded %d triples from %s", len(self.graph), file_path)
-        except FileNotFoundError:
-            logger.error("File not found: %s", file_path)
-            raise
-        except PermissionError:
-            logger.error("Permission denied reading file: %s", file_path)
-            raise
         except Exception as e:
             self._handle_parse_error(file_path, e)
             raise
@@ -583,8 +606,14 @@ class SKOSToNotionConverter:
 
     def get_definition(self, uri: URIRef) -> str:
         """Get definition for a concept."""
-        return self.language_helper.get_best_label(self.graph, uri,
-                                                   SKOS.definition) or ""
+        definitions = list(self.graph.objects(uri, SKOS.definition))
+        if definitions:
+            return str(definitions[0])
+        # Fallback to scopeNote
+        scope_notes = list(self.graph.objects(uri, SKOS.scopeNote))
+        if scope_notes:
+            return str(scope_notes[0])
+        return ""
 
     def get_alt_labels(self, uri: URIRef) -> List[str]:
         """Get alternative labels."""
@@ -833,8 +862,6 @@ class SKOSToNotionConverter:
             self.build_hierarchy()
 
         md_content = []
-        md_content.append("# SKOS Vocabulary\n")
-
         processed = set()
 
         def add_concept_md(concept, level=1, use_bullets=False):
@@ -859,19 +886,16 @@ class SKOSToNotionConverter:
                 for child in children:
                     add_concept_md(child, level + 1, use_bullets)
 
-        # Add table of contents
-        self._add_table_of_contents(md_content, schemes, orphans_no_scheme)
-
-        # Process concept schemes
-        self._process_schemes_to_markdown(schemes, md_content, add_concept_md,
-                                          orphans_by_scheme)
+        # Process concept schemes (no headers or TOC)
+        self._process_schemes_to_markdown_simple(schemes, md_content, add_concept_md,
+                                                  orphans_by_scheme)
 
         # Add orphans with no scheme
-        self._process_orphans_to_markdown(orphans_no_scheme, md_content,
-                                          add_concept_md)
+        self._process_orphans_to_markdown_simple(orphans_no_scheme, md_content,
+                                                  add_concept_md)
 
         # Write markdown file
-        self._write_markdown(output_file, md_content)
+        self._write_markdown_simple(output_file, md_content)
 
         logger.info("Created Markdown file: %s", output_file)
         logger.info("Processed %d unique concepts", len(processed))
@@ -937,20 +961,42 @@ class SKOSToNotionConverter:
         # Add URI in smaller text
         md_content.append(f"{metadata_indent}<sub>URI: {metadata['uri']}</sub>\n")
 
-    def _add_table_of_contents(self, md_content: List, schemes: Dict,
-                               orphans_no_scheme: Set):
-        """Add table of contents to markdown."""
-        toc = ["## Table of Contents\n"]
+    def _process_schemes_to_markdown_simple(self, schemes: Dict, md_content: List,
+                                             add_concept_md, orphans_by_scheme: Dict):
+        """Process schemes for simple markdown output without headers."""
         for scheme in sorted(schemes.keys(), key=lambda x: schemes[x]['label']):
-            scheme_label = schemes[scheme]['label']
-            anchor = scheme_label.lower().replace(' ', '-')
-            toc.append(f"- [{scheme_label}](#concept-scheme-{anchor})")
-        if orphans_no_scheme:
-            toc.append("- [Unassigned Concepts](#unassigned-concepts)")
-        toc.append("\n---\n")
+            scheme_data = schemes[scheme]
 
-        # Insert TOC after main title
-        md_content[1:1] = toc
+            # Add top concepts in alphabetical order (start at level 1)
+            sorted_top_concepts = sorted(scheme_data['top_concepts'],
+                                         key=self.get_label)
+            for i, top_concept in enumerate(sorted_top_concepts):
+                if i > 0:
+                    md_content.append("")
+                add_concept_md(top_concept, 1, use_bullets=False)
+
+            # Add orphans that belong to this scheme
+            if scheme in orphans_by_scheme and orphans_by_scheme[scheme]:
+                sorted_orphans = sorted(orphans_by_scheme[scheme],
+                                        key=self.get_label)
+                for orphan in sorted_orphans:
+                    md_content.append("")
+                    add_concept_md(orphan, 1, use_bullets=False)
+
+    def _process_orphans_to_markdown_simple(self, orphans_no_scheme: Set,
+                                             md_content: List, add_concept_md):
+        """Process orphan concepts for simple markdown output."""
+        if orphans_no_scheme:
+            sorted_orphans = sorted(orphans_no_scheme, key=self.get_label)
+            for orphan in sorted_orphans:
+                md_content.append("")
+                add_concept_md(orphan, 1, use_bullets=False)
+
+    def _write_markdown_simple(self, output_file: str, md_content: List):
+        """Write simple markdown file without formatting instructions."""
+        # Write markdown directly without extra formatting
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(md_content))
 
     def _process_schemes_to_markdown(self, schemes: Dict, md_content: List,
                                      add_concept_md, orphans_by_scheme: Dict):
@@ -991,23 +1037,134 @@ class SKOSToNotionConverter:
             for orphan in sorted_orphans:
                 add_concept_md(orphan, 3, use_bullets=False)
 
-    def _write_markdown(self, output_file: str, md_content: List):
-        """Write markdown file with formatting instructions."""
-        final_content = []
+    def to_confluence_xml(self, output_file: str):
+        """Convert to Confluence XML format for import."""
+        schemes, hierarchy, _, orphans_by_scheme, orphans_no_scheme = \
+            self.build_hierarchy()
 
-        # Add custom formatting instructions at the top
-        final_content.append("<!-- ")
-        final_content.append("NOTION IMPORT TIPS:")
-        final_content.append("1. Use Cmd/Ctrl+Shift+V to paste and preserve formatting")
-        final_content.append("2. Convert to toggle lists: highlight text and press Cmd/Ctrl+Shift+7")
-        final_content.append("3. Use synced blocks for concepts that appear in multiple places")
-        final_content.append("-->\n")
+        xml_content = []
+        # Use proper Confluence Storage Format structure
+        xml_content.append('<?xml version="1.0" encoding="UTF-8"?>')
+        xml_content.append('<ac:confluence-content>')
+        xml_content.append('<ac:structured-macro ac:name="expand" ac:schema-version="1">')
+        xml_content.append('<ac:parameter ac:name="title">SKOS Vocabulary</ac:parameter>')
+        xml_content.append('<ac:rich-text-body>')
 
-        final_content.extend(md_content)
+        processed = set()
 
-        # Write markdown
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(final_content))
+        def add_concept_xml(concept, level=1):
+            """Add concept to XML with proper structure."""
+            if concept in processed:
+                return
+
+            processed.add(concept)
+
+            # Get concept metadata
+            metadata = self._get_concept_metadata(concept)
+            
+            # Format concept for Confluence
+            self._format_concept_confluence(xml_content, metadata, level)
+
+            # Add children in alphabetical order
+            if concept in hierarchy:
+                children = sorted(hierarchy[concept], key=self.get_label)
+                for child in children:
+                    add_concept_xml(child, level + 1)
+
+        # Process concept schemes
+        self._process_schemes_to_confluence(schemes, xml_content, add_concept_xml,
+                                            orphans_by_scheme)
+
+        # Add orphans with no scheme
+        self._process_orphans_to_confluence(orphans_no_scheme, xml_content,
+                                            add_concept_xml)
+
+        xml_content.append('</ac:rich-text-body>')
+        xml_content.append('</ac:structured-macro>')
+        xml_content.append('</ac:confluence-content>')
+
+        # Write XML file with proper encoding
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(xml_content))
+        except (IOError, OSError) as e:
+            logger.error("Error writing Confluence XML file: %s", e)
+            raise
+
+        logger.info("Created Confluence XML file: %s", output_file)
+        logger.info("Processed %d unique concepts", len(processed))
+
+    def _format_concept_confluence(self, xml_content: List, metadata: Dict, level: int):
+        """Format concept for Confluence XML output."""
+        label = self._escape_xml(metadata['label'])
+        
+        # Create heading based on level
+        if level <= 6:
+            xml_content.append(f'<h{level}>{label}</h{level}>')
+        else:
+            # For deeper levels, use bold text with indentation
+            indent = "&nbsp;" * ((level - 6) * 4)
+            xml_content.append(f'<p>{indent}<strong>{label}</strong></p>')
+
+        # Add metadata as structured content
+        if metadata['definition']:
+            definition = self._escape_xml(metadata['definition'])
+            xml_content.append(f'<p><em>Definition:</em> {definition}</p>')
+        
+        if metadata['notation']:
+            notation = self._escape_xml(metadata['notation'])
+            xml_content.append(f'<p><em>Notation:</em> <code>{notation}</code></p>')
+        
+        if metadata['alt_labels']:
+            alt_labels = ', '.join([self._escape_xml(label) for label in metadata['alt_labels']])
+            xml_content.append(f'<p><em>Alternative Labels:</em> {alt_labels}</p>')
+        
+        # Add URI as collapsible info panel
+        uri = self._escape_xml(str(metadata['uri']))
+        xml_content.append('<ac:structured-macro ac:name="info" ac:schema-version="1">')
+        xml_content.append('<ac:parameter ac:name="title">URI</ac:parameter>')
+        xml_content.append('<ac:rich-text-body>')
+        xml_content.append(f'<p><code>{uri}</code></p>')
+        xml_content.append('</ac:rich-text-body>')
+        xml_content.append('</ac:structured-macro>')
+        xml_content.append('')  # Add spacing between concepts
+
+    def _process_schemes_to_confluence(self, schemes: Dict, xml_content: List,
+                                       add_concept_xml, orphans_by_scheme: Dict):
+        """Process schemes for Confluence XML output."""
+        for scheme in sorted(schemes.keys(), key=lambda x: schemes[x]['label']):
+            scheme_data = schemes[scheme]
+
+            # Add top concepts
+            sorted_top_concepts = sorted(scheme_data['top_concepts'],
+                                         key=self.get_label)
+            for top_concept in sorted_top_concepts:
+                add_concept_xml(top_concept, 1)
+
+            # Add orphans that belong to this scheme
+            if scheme in orphans_by_scheme and orphans_by_scheme[scheme]:
+                sorted_orphans = sorted(orphans_by_scheme[scheme],
+                                        key=self.get_label)
+                for orphan in sorted_orphans:
+                    add_concept_xml(orphan, 1)
+
+    def _process_orphans_to_confluence(self, orphans_no_scheme: Set,
+                                       xml_content: List, add_concept_xml):
+        """Process orphan concepts for Confluence XML output."""
+        if orphans_no_scheme:
+            sorted_orphans = sorted(orphans_no_scheme, key=self.get_label)
+            for orphan in sorted_orphans:
+                add_concept_xml(orphan, 1)
+
+    def _escape_xml(self, text: str) -> str:
+        """Escape special XML characters."""
+        if not text:
+            return ""
+        return (text.replace('&', '&amp;')
+                    .replace('<', '&lt;')
+                    .replace('>', '&gt;')
+                    .replace('"', '&quot;')
+                    .replace("'", '&#39;'))
 
     def to_notion_json(self, output_file: str):
         """Convert to JSON format that can be processed for Notion API."""
@@ -1153,7 +1310,7 @@ class NotionToSKOSConverter:
                          type(e).__name__, e)
             raise
 
-        current_scheme = None
+        current_scheme: Optional[URIRef] = None
         current_parent_stack = []
         i = 0
 
@@ -1177,7 +1334,7 @@ class NotionToSKOSConverter:
         logger.info("Parsed %d triples", len(self.graph))
         return self.graph
 
-    def _process_line(self, lines: List[str], i: int, current_scheme: URIRef,
+    def _process_line(self, lines: List[str], i: int, current_scheme: Optional[URIRef],
                       current_parent_stack: List) -> int:
         """Process a single line of markdown."""
         line = lines[i].strip()
@@ -1193,7 +1350,634 @@ class NotionToSKOSConverter:
             return i
 
         # Parse headers
-        header_match = re.match(r'^(#+)\s+(.+)$', line)
+        header_match = re.match(r'^(#+)\s+(.+)
+
+    def _clean_title(self, title: str) -> str:
+        """Clean title by removing visual indicators."""
+        # Remove visual indicators
+        title = re.sub(r'^[▸▹◦📂📁📄]\s*', '', title)
+        return title
+
+    def _should_skip_section(self, title: str) -> bool:
+        """Check if section should be skipped."""
+        return (title.startswith('[') or
+                title.startswith('Other Concepts') or
+                title == 'Unassigned Concepts')
+
+    def _extract_metadata(self, lines: List[str], start_index: int) -> Dict:
+        """Extract metadata from lines following a header."""
+        metadata = {
+            'definition': None,
+            'alt_labels': [],
+            'notation': None,
+            'existing_uri': None
+        }
+
+        j = start_index + 1
+        while j < len(lines) and not lines[j].strip().startswith('#'):
+            metadata_line = lines[j].strip()
+
+            # Skip empty lines and comments
+            if not metadata_line or metadata_line.startswith('<!--'):
+                j += 1
+                continue
+
+            # Parse different metadata types with better error handling
+            try:
+                if (metadata_line.startswith('_Definition:_') or
+                        metadata_line.startswith('**Definition:**')):
+                    parts = metadata_line.split(':', 1)
+                    if len(parts) > 1:
+                        metadata['definition'] = parts[1].strip()
+
+                elif (metadata_line.startswith('_Alternative Labels:_') or
+                      metadata_line.startswith('**Alternative Labels:**')):
+                    parts = metadata_line.split(':', 1)
+                    if len(parts) > 1:
+                        alt_text = parts[1].strip()
+                        # Better parsing of alternative labels
+                        metadata['alt_labels'] = [
+                            label.strip() 
+                            for label in alt_text.split(',')
+                            if label.strip() and label.strip() != 'None'
+                        ]
+
+                elif (metadata_line.startswith('_Notation:_') or
+                      metadata_line.startswith('**Notation:**')):
+                    parts = metadata_line.split(':', 1)
+                    if len(parts) > 1:
+                        notation = parts[1].strip().strip('`')
+                        if notation and notation != 'None':
+                            metadata['notation'] = notation
+
+                elif (metadata_line.startswith('<sub>URI:') or
+                      metadata_line.startswith('**URI:**')):
+                    uri_text = metadata_line
+                    uri_text = re.sub(r'<sub>URI:\s*|</sub>|URI:\s*|\*\*URI:\*\*\s*|`',
+                                      '', uri_text).strip()
+                    if uri_text and uri_text != 'None':
+                        # Validate URI format
+                        if self._is_valid_uri(uri_text):
+                            metadata['existing_uri'] = uri_text
+                        else:
+                            logger.warning("Skipping invalid URI: %s", uri_text)
+
+            except Exception as e:
+                logger.warning("Error parsing metadata line '%s': %s", 
+                               metadata_line, e)
+                # Continue processing other lines
+
+            j += 1
+
+        return metadata
+
+    def _is_valid_uri(self, uri_string: str) -> bool:
+        """Basic URI validation with improved checking."""
+        if not uri_string or len(uri_string) < 3:
+            return False
+            
+        try:
+            # Check for basic URI structure
+            if not (uri_string.startswith('http://') or 
+                    uri_string.startswith('https://') or
+                    uri_string.startswith('urn:') or
+                    uri_string.startswith('file://') or
+                    '://' in uri_string):
+                return False
+                
+            # Try to create URIRef to validate
+            URIRef(uri_string)
+            return True
+        except Exception:
+            return False
+
+    def _process_concept_scheme(self, title: str, metadata: Dict,
+                                current_parent_stack: List) -> URIRef:
+        """Process a concept scheme (H1)."""
+        if title.lower().startswith('concept scheme:'):
+            title = title.split(':', 1)[1].strip()
+
+        # Create or reuse URI
+        scheme_uri = self.uri_manager.get_or_create_uri(title,
+                                                        metadata['existing_uri'])
+
+        # Add to graph
+        self.graph.add((scheme_uri, RDF.type, SKOS.ConceptScheme))
+        self.graph.add((scheme_uri, SKOS.prefLabel, Literal(title)))
+
+        # Reset hierarchy tracking
+        current_parent_stack.clear()
+        current_parent_stack.append((1, scheme_uri, title))
+
+        return scheme_uri
+
+    def _process_concept(self, title: str, metadata: Dict, level: int,
+                         current_scheme: URIRef, current_parent_stack: List):
+        """Process a concept (H2+)."""
+        # Create or reuse concept URI
+        concept_uri = self.uri_manager.get_or_create_uri(title,
+                                                         metadata['existing_uri'])
+
+        # Add basic concept info
+        self.graph.add((concept_uri, RDF.type, SKOS.Concept))
+        self.graph.add((concept_uri, SKOS.prefLabel, Literal(title)))
+        self.graph.add((concept_uri, SKOS.inScheme, current_scheme))
+
+        # Add definition (or placeholder)
+        if metadata['definition']:
+            self.graph.add((concept_uri, SKOS.definition,
+                            Literal(metadata['definition'])))
+        else:
+            self.graph.add((concept_uri, SKOS.definition,
+                            Literal("Lorem ipsum")))
+
+        # Add alternative labels
+        for alt_label in metadata['alt_labels']:
+            if alt_label:  # Skip empty labels
+                self.graph.add((concept_uri, SKOS.altLabel, Literal(alt_label)))
+
+        # Add notation if present
+        if metadata['notation']:
+            self.graph.add((concept_uri, SKOS.notation,
+                            Literal(metadata['notation'])))
+
+        # Update parent stack to current level
+        while current_parent_stack and current_parent_stack[-1][0] >= level:
+            current_parent_stack.pop()
+
+        # Establish relationships
+        if level == 2:  # H2 = Top Concept
+            self.graph.add((current_scheme, SKOS.hasTopConcept, concept_uri))
+            self.graph.add((concept_uri, SKOS.topConceptOf, current_scheme))
+        else:  # H3+ = narrower concepts
+            if current_parent_stack:
+                parent_uri = current_parent_stack[-1][1]
+                self.graph.add((concept_uri, SKOS.broader, parent_uri))
+                self.graph.add((parent_uri, SKOS.narrower, concept_uri))
+
+        # Add to stack for potential children
+        current_parent_stack.append((level, concept_uri, title))
+
+    def export_turtle(self, output_file: str):
+        """Export the graph as Turtle."""
+        try:
+            turtle_content = self.graph.serialize(format='turtle')
+        except Exception as e:
+            logger.error("Error serializing graph: %s", e)
+            raise
+
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(turtle_content)
+        except (IOError, OSError) as e:
+            logger.error("Error writing output file: %s", e)
+            raise
+
+        logger.info("Exported SKOS Turtle to: %s", output_file)
+        logger.info("Total triples: %d", len(self.graph))
+
+        # Count resources
+        concepts = set(self.graph.subjects(RDF.type, SKOS.Concept))
+        schemes = set(self.graph.subjects(RDF.type, SKOS.ConceptScheme))
+        logger.info("Concept Schemes: %d", len(schemes))
+        logger.info("Concepts: %d", len(concepts))
+
+        # Show sample output
+        logger.info("First few lines of output:")
+        logger.info("=" * 50)
+        lines = turtle_content.splitlines()
+        for line in lines[:10]:  # Reduced from 20 to 10
+            logger.info(line)
+        if len(lines) > 10:
+            logger.info("...")
+            logger.info("=" * 50)
+
+
+def create_argument_parser() -> argparse.ArgumentParser:
+    """Create and configure argument parser."""
+    parser = argparse.ArgumentParser(
+        description='Convert between SKOS RDF (Turtle) and various formats'
+    )
+
+    # Create subparsers for different operations
+    subparsers = parser.add_subparsers(dest='command', help='Conversion target')
+
+    # SKOS to various formats
+    create_skos_to_csv_parser(subparsers)
+    create_skos_to_markdown_parser(subparsers)
+    create_skos_to_json_parser(subparsers)
+    create_skos_to_confluence_parser(subparsers)
+
+    # Notion to SKOS
+    create_notion_to_skos_parser(subparsers)
+
+    return parser
+
+
+def create_skos_to_csv_parser(subparsers):
+    """Create parser for SKOS to CSV conversion."""
+    csv_parser = subparsers.add_parser('to-csv', help='Convert SKOS Turtle to CSV format')
+    csv_parser.add_argument('input_file', help='Input Turtle RDF file')
+    csv_parser.add_argument('--output', help='Output file name (without extension)')
+    csv_parser.add_argument('--skip-validation', action='store_true',
+                             help='Skip SKOS validation checks')
+    csv_parser.add_argument('--force', action='store_true',
+                             help='Continue conversion even if validation finds errors')
+    csv_parser.add_argument('--language',
+                             help='Preferred language for labels (e.g., en, fr, de)')
+    csv_parser.add_argument('--fallback-languages', nargs='*',
+                             help='Fallback languages in order of preference')
+    csv_parser.add_argument('--batch-dir',
+                             help='Process all .ttl files in directory')
+    csv_parser.add_argument('--output-dir',
+                             help='Output directory for batch processing')
+
+
+def create_skos_to_markdown_parser(subparsers):
+    """Create parser for SKOS to Markdown conversion."""
+    md_parser = subparsers.add_parser('to-markdown', help='Convert SKOS Turtle to Markdown format')
+    md_parser.add_argument('input_file', help='Input Turtle RDF file')
+    md_parser.add_argument('--output', help='Output file name (without extension)')
+    md_parser.add_argument('--skip-validation', action='store_true',
+                             help='Skip SKOS validation checks')
+    md_parser.add_argument('--force', action='store_true',
+                             help='Continue conversion even if validation finds errors')
+    md_parser.add_argument('--markdown-style',
+                             choices=['headings', 'bullets', 'mixed'],
+                             default='headings',
+                             help='Markdown formatting style (default: headings)')
+    md_parser.add_argument('--language',
+                             help='Preferred language for labels (e.g., en, fr, de)')
+    md_parser.add_argument('--fallback-languages', nargs='*',
+                             help='Fallback languages in order of preference')
+    md_parser.add_argument('--batch-dir',
+                             help='Process all .ttl files in directory')
+    md_parser.add_argument('--output-dir',
+                             help='Output directory for batch processing')
+
+
+def create_skos_to_json_parser(subparsers):
+    """Create parser for SKOS to JSON conversion."""
+    json_parser = subparsers.add_parser('to-json', help='Convert SKOS Turtle to JSON format')
+    json_parser.add_argument('input_file', help='Input Turtle RDF file')
+    json_parser.add_argument('--output', help='Output file name (without extension)')
+    json_parser.add_argument('--skip-validation', action='store_true',
+                             help='Skip SKOS validation checks')
+    json_parser.add_argument('--force', action='store_true',
+                             help='Continue conversion even if validation finds errors')
+    json_parser.add_argument('--language',
+                             help='Preferred language for labels (e.g., en, fr, de)')
+    json_parser.add_argument('--fallback-languages', nargs='*',
+                             help='Fallback languages in order of preference')
+    json_parser.add_argument('--batch-dir',
+                             help='Process all .ttl files in directory')
+    json_parser.add_argument('--output-dir',
+                             help='Output directory for batch processing')
+
+
+def create_skos_to_confluence_parser(subparsers):
+    """Create parser for SKOS to Confluence XML conversion."""
+    conf_parser = subparsers.add_parser('to-confluence', help='Convert SKOS Turtle to Confluence XML format')
+    conf_parser.add_argument('input_file', help='Input Turtle RDF file')
+    conf_parser.add_argument('--output', help='Output file name (without extension)')
+    conf_parser.add_argument('--skip-validation', action='store_true',
+                             help='Skip SKOS validation checks')
+    conf_parser.add_argument('--force', action='store_true',
+                             help='Continue conversion even if validation finds errors')
+    conf_parser.add_argument('--language',
+                             help='Preferred language for labels (e.g., en, fr, de)')
+    conf_parser.add_argument('--fallback-languages', nargs='*',
+                             help='Fallback languages in order of preference')
+    conf_parser.add_argument('--batch-dir',
+                             help='Process all .ttl files in directory')
+    conf_parser.add_argument('--output-dir',
+                             help='Output directory for batch processing')
+
+
+def create_notion_to_skos_parser(subparsers):
+    """Create parser for Notion to SKOS conversion."""
+    notion_parser = subparsers.add_parser('to-skos',
+                                          help='Convert Notion markdown to SKOS Turtle')
+    notion_parser.add_argument('input_file', help='Input Notion markdown file')
+    notion_parser.add_argument('--output', help='Output file name (default: input_skos.ttl)')
+    notion_parser.add_argument('--namespace', default='http://example.org/vocabulary#',
+                               help='Namespace URI for new concepts '
+                                    '(default: http://example.org/vocabulary#)')
+    notion_parser.add_argument('--prefix', default='ex',
+                               help='Namespace prefix (default: ex)')
+    notion_parser.add_argument('--batch-dir',
+                               help='Process all .md files in directory')
+    notion_parser.add_argument('--output-dir',
+                               help='Output directory for batch processing')
+
+
+def handle_skos_conversion(args, format_type: str) -> int:
+    """Handle SKOS to various format conversions."""
+    logger.info("Processing SKOS to %s conversion...", format_type.upper())
+
+    # Validate input arguments
+    if not hasattr(args, 'input_file') or not args.input_file:
+        logger.error("Input file is required")
+        return 1
+
+    # Create configuration
+    config = ConverterConfig()
+    config.markdown_style = getattr(args, 'markdown_style', 'headings')
+
+    # Set language preferences
+    if hasattr(args, 'language') and args.language:
+        fallbacks = getattr(args, 'fallback_languages', None) or ["en", ""]
+        config.set_language_preferences(args.language, fallbacks)
+
+    # Handle batch processing
+    if hasattr(args, 'batch_dir') and args.batch_dir:
+        if not hasattr(args, 'output_dir') or not args.output_dir:
+            logger.error("--output-dir required for batch processing")
+            return 1
+
+        if not os.path.exists(args.batch_dir):
+            logger.error("Batch directory not found: %s", args.batch_dir)
+            return 1
+
+        batch_processor = BatchProcessor(config)
+        batch_processor.process_directory(args.batch_dir, args.output_dir,
+                                          format_type, f'to-{format_type}')
+        return 0
+
+    # Single file processing
+    logger.info("Input file: %s", args.input_file)
+
+    # Check if input file exists
+    if not os.path.exists(args.input_file):
+        logger.error("Input file not found: %s", args.input_file)
+        logger.info("Current directory: %s", os.getcwd())
+        return 1
+
+    # Check file extension
+    if not args.input_file.lower().endswith(('.ttl', '.turtle', '.rdf')):
+        logger.warning("Input file doesn't have expected extension (.ttl, .turtle, .rdf)")
+
+    logger.info("Input file exists: %s", os.path.abspath(args.input_file))
+
+    # Determine output file name with proper extension
+    if args.output:
+        base_output = args.output
+    else:
+        base_output = args.input_file.rsplit('.', 1)[0] + f'_{format_type}'
+
+    # Add proper file extension based on format
+    file_extensions = {
+        'csv': '.csv',
+        'markdown': '.md', 
+        'json': '.json',
+        'confluence': '.xml'
+    }
+    
+    output_file = base_output + file_extensions.get(format_type, '')
+    logger.info("Output file: %s", output_file)
+
+    # Create converter and load file
+    converter = SKOSToNotionConverter(config)
+
+    try:
+        logger.info("Loading Turtle file...")
+        converter.load_turtle(args.input_file)
+    except (ValueError, TypeError, AttributeError, IOError, OSError):
+        logger.error("Failed to load Turtle file")
+        return 1
+
+    # Run validation unless skipped
+    if not getattr(args, 'skip_validation', False):
+        is_valid = converter.validate_skos()
+
+        if not is_valid and not getattr(args, 'force', False):
+            logger.error("Validation found critical errors. Conversion aborted.")
+            logger.info("Use --force to convert anyway, or fix the issues and try again.")
+            logger.info("Use --skip-validation to skip validation entirely.")
+            return 1
+        elif not is_valid and getattr(args, 'force', False):
+            logger.warning("Continuing with conversion despite errors...")
+
+    # Perform conversion based on format
+    try:
+        if format_type == 'csv':
+            converter.to_notion_csv(output_file)
+        elif format_type == 'markdown':
+            converter.to_notion_markdown(output_file)
+        elif format_type == 'json':
+            converter.to_notion_json(output_file)
+        elif format_type == 'confluence':
+            converter.to_confluence_xml(output_file)
+        else:
+            logger.error("Unknown format type: %s", format_type)
+            return 1
+            
+    except (ValueError, TypeError, AttributeError, IOError, OSError) as e:
+        logger.error("Error during conversion: %s", type(e).__name__)
+        logger.error("Details: %s", e)
+        return 1
+
+    print_import_instructions(format_type)
+    return 0
+
+
+def handle_to_skos_conversion(args) -> int:
+    """Handle Notion to SKOS conversion."""
+    logger.info("Processing Notion to SKOS conversion...")
+    
+    # Validate input arguments
+    if not hasattr(args, 'input_file') or not args.input_file:
+        logger.error("Input file is required")
+        return 1
+
+    # Handle batch processing
+    if hasattr(args, 'batch_dir') and args.batch_dir:
+        if not hasattr(args, 'output_dir') or not args.output_dir:
+            logger.error("--output-dir required for batch processing")
+            return 1
+
+        if not os.path.exists(args.batch_dir):
+            logger.error("Batch directory not found: %s", args.batch_dir)
+            return 1
+
+        config = ConverterConfig()
+        config.namespace_uri = getattr(args, 'namespace', 'http://example.org/vocabulary#')
+        config.prefix = getattr(args, 'prefix', 'ex')
+
+        batch_processor = BatchProcessor(config)
+        batch_processor.process_directory(args.batch_dir, args.output_dir,
+                                          'skos', 'to-skos')
+        return 0
+
+    # Single file processing
+    logger.info("Input file: %s", args.input_file)
+    
+    # Check if input file exists
+    if not os.path.exists(args.input_file):
+        logger.error("Input file not found: %s", args.input_file)
+        return 1
+
+    # Check file extension
+    if not args.input_file.lower().endswith(('.md', '.markdown')):
+        logger.warning("Input file doesn't have expected extension (.md, .markdown)")
+
+    # Determine output file
+    if hasattr(args, 'output') and args.output:
+        output_file = args.output
+        if not output_file.endswith('.ttl'):
+            output_file += '.ttl'
+    else:
+        output_file = args.input_file.rsplit('.', 1)[0] + '_skos.ttl'
+
+    logger.info("Output file: %s", output_file)
+
+    # Configure namespace
+    namespace, prefix = configure_namespace(args)
+
+    # Create converter and parse
+    converter = NotionToSKOSConverter(namespace_uri=namespace, prefix=prefix)
+
+    try:
+        converter.parse_markdown(args.input_file)
+    except (ValueError, TypeError, AttributeError, IOError, OSError):
+        logger.error("Failed to parse markdown file")
+        return 1
+
+    try:
+        converter.export_turtle(output_file)
+    except (IOError, OSError) as e:
+        logger.error("Error exporting Turtle: %s", type(e).__name__)
+        logger.error("Details: %s", e)
+        return 1
+
+    print_skos_conversion_summary()
+    return 0
+
+
+def configure_namespace(args) -> Tuple[str, str]:
+    """Configure namespace for SKOS conversion."""
+    namespace = getattr(args, 'namespace', 'http://example.org/vocabulary#')
+    prefix = getattr(args, 'prefix', 'ex')
+
+    # Only prompt for namespace if using default and in interactive mode
+    if (namespace == 'http://example.org/vocabulary#' and 
+        sys.stdin.isatty() and sys.stdout.isatty()):
+        print("\n" + "="*60)
+        print("NAMESPACE CONFIGURATION")
+        print("="*60)
+        print(f"Current namespace: {namespace}")
+        print(f"Current prefix: {prefix}")
+        print("\nPress Enter to use these defaults, or type new values:")
+
+        try:
+            new_namespace = input("Namespace URI [http://example.org/vocabulary#]: ").strip()
+            if new_namespace:
+                namespace = new_namespace
+
+            new_prefix = input("Namespace prefix [ex]: ").strip()
+            if new_prefix:
+                prefix = new_prefix
+        except (EOFError, KeyboardInterrupt):
+            # Handle non-interactive environments gracefully
+            logger.info("Using default namespace configuration")
+
+    return namespace, prefix
+
+
+def print_import_instructions(format_type: str):
+    """Print format-specific import instructions."""
+    print(f"\nConversion to {format_type.upper()} complete!")
+    
+    if format_type == 'csv':
+        print("\nCSV Import Instructions:")
+        print("• Import into Notion, Excel, or any spreadsheet application")
+        print("• Use 'Title' column as the main identifier")
+        print("• 'Parent' column shows hierarchical relationships")
+        print("• Filter/group by 'Concept Scheme' or 'Level'")
+    
+    elif format_type == 'markdown':
+        print("\nMarkdown Import Instructions:")
+        print("• Copy/paste into Notion, Confluence, or any markdown editor")
+        print("• Simple hierarchical structure with clean headings")
+        print("• In Notion: Use Cmd/Ctrl+Shift+7 to convert to toggle lists")
+        print("• No extra formatting - ready for direct use")
+    
+    elif format_type == 'json':
+        print("\nJSON Import Instructions:")
+        print("• Use with APIs (Notion API, custom applications)")
+        print("• Structured data with full hierarchy preserved")
+        print("• Contains complete concept metadata and relationships")
+    
+    elif format_type == 'confluence':
+        print("\nConfluence XML Import Instructions:")
+        print("• Go to Confluence Space Settings → Content Tools → Import")
+        print("• Choose 'Confluence XML' as import format")
+        print("• Upload the generated XML file")
+        print("• Content imports with expandable sections and info panels")
+
+
+def print_skos_conversion_summary():
+    """Print summary of SKOS conversion rules."""
+    print("\n✅ Notion to SKOS conversion complete!")
+    print("\nConversion rules applied:")
+    print("- H1 headers → SKOS Concept Schemes")
+    print("- H2 headers → Top Concepts")
+    print("- H3+ headers → Narrower concepts with broader relationships")
+    print("- All concepts have skos:inScheme relationship")
+    print("- New concepts assigned UUID-based URIs")
+    print("- Missing definitions replaced with 'Lorem ipsum'")
+
+
+def main():
+    """Main entry point for the SKOS-Notion converter."""
+    logger.info("Starting SKOS-Notion Converter...")
+
+    try:
+        parser = create_argument_parser()
+        args = parser.parse_args()
+
+        logger.info("Parsing command line arguments...")
+        logger.debug("Parsed args: %s", args)
+
+        if not args.command:
+            logger.info("No command specified. Available commands:")
+            logger.info("  to-csv        - Convert SKOS to CSV format")
+            logger.info("  to-markdown   - Convert SKOS to Markdown format") 
+            logger.info("  to-json       - Convert SKOS to JSON format")
+            logger.info("  to-confluence - Convert SKOS to Confluence XML format")
+            logger.info("  to-skos       - Convert Notion markdown to SKOS")
+            logger.info("Use --help with any command for detailed options")
+            return 0
+
+        if args.command == 'to-csv':
+            return handle_skos_conversion(args, 'csv')
+        elif args.command == 'to-markdown':
+            return handle_skos_conversion(args, 'markdown')
+        elif args.command == 'to-json':
+            return handle_skos_conversion(args, 'json')
+        elif args.command == 'to-confluence':
+            return handle_skos_conversion(args, 'confluence')
+        elif args.command == 'to-skos':
+            return handle_to_skos_conversion(args)
+
+    except KeyboardInterrupt:
+        logger.warning("Conversion cancelled by user")
+        return 1
+    except (ValueError, TypeError, AttributeError, IOError, OSError) as e:
+        logger.error("Unexpected error: %s", type(e).__name__)
+        logger.error("Details: %s", e)
+        logger.debug("Full traceback:", exc_info=True)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    logger.info("Python version: %s", sys.version)
+    logger.debug("Command line arguments: %s", sys.argv)
+
+    exit_code = main()
+    sys.exit(exit_code if exit_code else 0), line)
         if header_match:
             level = len(header_match.group(1))
             title = header_match.group(2)
