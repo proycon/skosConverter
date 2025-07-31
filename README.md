@@ -1,6 +1,6 @@
 # skosConverter
 
-Conversion from SKOS to Markdown and other formats.
+Command line tool forconversion from SKOS to Markdown and other formats.
 
 Supports turtle and JSON-LD input.
 
