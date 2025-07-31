@@ -504,7 +504,10 @@ class BatchProcessor:
                            format_type: str):
         """Process a single SKOS file."""
         converter = SKOSToNotionConverter(self.config)
-        converter.load_turtle(str(file_path))
+        if str(file_path).endswith(".json") or str(file_path).endswith(".jsonld") :
+            converter.load_jsonld(str(file_path))
+        else:
+            converter.load_turtle(str(file_path))
 
         base_name = file_path.stem
         if format_type == 'csv':
@@ -555,6 +558,24 @@ class SKOSToNotionConverter:
         
         try:
             self.graph.parse(file_path, format='turtle')
+            logger.info("Loaded %d triples from %s", len(self.graph), file_path)
+        except Exception as e:
+            self._handle_parse_error(file_path, e)
+            raise
+
+    def load_jsonld(self, file_path: str):
+        """Load JSON-LD RDF file with error handling."""
+        if not file_path:
+            raise ValueError("File path cannot be empty")
+        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+        
+        if not os.access(file_path, os.R_OK):
+            raise PermissionError(f"Permission denied reading file: {file_path}")
+        
+        try:
+            self.graph.parse(file_path, format='json-ld')
             logger.info("Loaded %d triples from %s", len(self.graph), file_path)
         except Exception as e:
             self._handle_parse_error(file_path, e)
@@ -1702,8 +1723,8 @@ def handle_skos_conversion(args, format_type: str) -> int:
         return 1
 
     # Check file extension
-    if not args.input_file.lower().endswith(('.ttl', '.turtle', '.rdf')):
-        logger.warning("Input file doesn't have expected extension (.ttl, .turtle, .rdf)")
+    if not args.input_file.lower().endswith(('.ttl', '.turtle', '.rdf','.json','.jsonld')):
+        logger.warning("Input file doesn't have expected extension (.ttl, .turtle, .rdf, .json, .jsonld)")
 
     logger.info("Input file exists: %s", os.path.abspath(args.input_file))
 
@@ -1727,12 +1748,21 @@ def handle_skos_conversion(args, format_type: str) -> int:
     # Create converter and load file
     converter = SKOSToNotionConverter(config)
 
-    try:
-        logger.info("Loading Turtle file...")
-        converter.load_turtle(args.input_file)
-    except (ValueError, TypeError, AttributeError, IOError, OSError):
-        logger.error("Failed to load Turtle file")
-        return 1
+
+    if args.input_file.endswith(".json") or args.input_file.endswith(".jsonld"):
+        try:
+            logger.info("Loading JSON-LD file...")
+            converter.load_jsonld(args.input_file)
+        except (ValueError, TypeError, AttributeError, IOError, OSError):
+            logger.error("Failed to load Turtle file")
+            return 1
+    else:
+        try:
+            logger.info("Loading Turtle file...")
+            converter.load_turtle(args.input_file)
+        except (ValueError, TypeError, AttributeError, IOError, OSError):
+            logger.error("Failed to load Turtle file")
+            return 1
 
     # Run validation unless skipped
     if not getattr(args, 'skip_validation', False):
