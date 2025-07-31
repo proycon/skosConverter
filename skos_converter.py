@@ -30,7 +30,7 @@ from typing import Dict, List, Set, Optional, Tuple, Union, Any
 
 # Third-party imports
 from rdflib import Graph, Namespace, URIRef, Literal
-from rdflib.namespace import SKOS, RDF, RDFS, DC, DCTERMS
+from rdflib.namespace import SKOS, RDF, RDFS, DC, DCTERMS, OWL
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -220,7 +220,7 @@ class SKOSValidator:
             missing_has_top_concept = claimed_top_concepts - has_top_concepts
             
             scheme_label = self._get_simple_label(scheme)
-            
+
             if missing_top_concept_of:
                 concept_labels = [self._get_simple_label(c) for c in missing_top_concept_of]
                 self.warnings.append(
@@ -641,6 +641,11 @@ class SKOSToNotionConverter:
         alt_labels = list(self.graph.objects(uri, SKOS.altLabel))
         return [str(label) for label in alt_labels]
 
+    def get_same_as(self, uri: URIRef) -> List[str]:
+        """Get alternative labels."""
+        alt_labels = list(self.graph.objects(uri, OWL.sameAs))
+        return [str(label) for label in alt_labels]
+
     def get_notation(self, uri: URIRef) -> str:
         """Get notation/code for a concept."""
         notations = list(self.graph.objects(uri, SKOS.notation))
@@ -928,7 +933,8 @@ class SKOSToNotionConverter:
             'label': self.get_label(concept),
             'definition': self.get_definition(concept),
             'alt_labels': self.get_alt_labels(concept),
-            'notation': self.get_notation(concept)
+            'notation': self.get_notation(concept),
+            'same_as': self.get_same_as(concept)
         }
 
     def _format_concept_markdown(self, md_content: List, metadata: Dict,
@@ -980,7 +986,13 @@ class SKOSToNotionConverter:
                               f"{', '.join(metadata['alt_labels'])}  ")
 
         # Add URI in smaller text
-        md_content.append(f"{metadata_indent}<sub>URI: {metadata['uri']}</sub>\n")
+        md_content.append(f"{metadata_indent}_URI:_ <{metadata['uri']}>")
+
+        if metadata['same_as']:
+            md_content.append(f"{metadata_indent}_Same as:_ "
+                              f"{', '.join((f"<{x}>" for x in metadata['same_as']))}  ")
+
+        md_content.append('\n')
 
     def _process_schemes_to_markdown_simple(self, schemes: Dict, md_content: List,
                                              add_concept_md, orphans_by_scheme: Dict):
