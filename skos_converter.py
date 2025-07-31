@@ -643,8 +643,13 @@ class SKOSToNotionConverter:
 
     def get_same_as(self, uri: URIRef) -> List[str]:
         """Get alternative labels."""
-        alt_labels = list(self.graph.objects(uri, OWL.sameAs))
-        return [str(label) for label in alt_labels]
+        same_as = list(self.graph.objects(uri, OWL.sameAs))
+        return [str(item) for item in same_as]
+
+    def get_related(self, uri: URIRef) -> List[str]:
+        """Get alternative labels."""
+        related = list(self.graph.objects(uri, SKOS.related))
+        return [str(item) for item in related]
 
     def get_notation(self, uri: URIRef) -> str:
         """Get notation/code for a concept."""
@@ -934,7 +939,8 @@ class SKOSToNotionConverter:
             'definition': self.get_definition(concept),
             'alt_labels': self.get_alt_labels(concept),
             'notation': self.get_notation(concept),
-            'same_as': self.get_same_as(concept)
+            'same_as': self.get_same_as(concept),
+            'related': self.get_related(concept)
         }
 
     def _format_concept_markdown(self, md_content: List, metadata: Dict,
@@ -991,6 +997,9 @@ class SKOSToNotionConverter:
         if metadata['same_as']:
             md_content.append(f"{metadata_indent}_Same as:_ "
                               f"{', '.join((f"<{x}>" for x in metadata['same_as']))}  ")
+        if metadata['related']:
+            md_content.append(f"{metadata_indent}_Related:_ "
+                              f"{', '.join((f"<{x}>" for x in metadata['related']))}  ")
 
         md_content.append('\n')
 
