@@ -1753,7 +1753,7 @@ def handle_skos_conversion(args, format_type: str) -> int:
     if args.output:
         base_output = args.output
     else:
-        base_output = args.input_file.rsplit('.', 1)[0] + f'_{format_type}'
+        base_output = args.input_file.rsplit('.', 1)[0]
 
     # Add proper file extension based on format
     file_extensions = {
